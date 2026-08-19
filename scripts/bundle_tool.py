@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import re
 import shutil
 import struct
 import subprocess
@@ -17,6 +19,28 @@ from typing import Protocol
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "sources.json"
+MACOS_LOCK_PATH = ROOT / "config" / "macos-source-lock.json"
+MACOS_SOURCE_FILES = {
+    "SDL2.tar.gz",
+    "SVT-AV1.tar.gz",
+    "cmake-release.tar.gz",
+    "ffmpeg.tar.bz2",
+    "fontconfig.tar.xz",
+    "freetype.tar.gz",
+    "fribidi.tar.xz",
+    "harfbuzz.tar.xz",
+    "libass.tar.gz",
+    "libogg.tar.gz",
+    "libvmaf.tar.gz",
+    "libxml2.tar.xz",
+    "meson.whl",
+    "nasm.tar.gz",
+    "ninja.tar.gz",
+    "openssl.tar.gz",
+    "pkg-config.tar.gz",
+    "x265.tar.gz",
+    "zlib.tar.gz",
+}
 TARGETS = {
     "windows-x86_64",
     "windows-arm64",
@@ -35,6 +59,14 @@ MACHINE_TYPES = {
     "x86_64": {"pe": 0x8664, "elf": 0x3E, "macho": 0x01000007},
     "arm64": {"pe": 0xAA64, "elf": 0xB7, "macho": 0x0100000C},
 }
+EXPECTED_RUNNER_CONTEXT = {
+    "windows-x86_64": {"runner_os": "Windows", "runner_arch": "X64"},
+    "windows-arm64": {"runner_os": "Windows", "runner_arch": "ARM64"},
+    "linux-x86_64": {"runner_os": "Linux", "runner_arch": "X64"},
+    "linux-arm64": {"runner_os": "Linux", "runner_arch": "ARM64"},
+    "macos-x86_64": {"runner_os": "macOS", "runner_arch": "X64"},
+    "macos-arm64": {"runner_os": "macOS", "runner_arch": "ARM64"},
+}
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict[str, object]:
@@ -44,6 +76,13 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, object]:
     targets = data.get("targets")
     if not isinstance(targets, dict) or set(targets) != TARGETS:
         raise ValueError(f"Source config must define exactly: {sorted(TARGETS)}")
+    return data
+
+
+def load_macos_source_lock(path: Path = MACOS_LOCK_PATH) -> dict[str, object]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("schema_version") != 1:
+        raise ValueError("Unsupported macOS source lock schema.")
     return data
 
 
@@ -72,6 +111,9 @@ def validate_config(data: dict[str, object]) -> None:
         if not isinstance(entry, dict):
             raise ValueError("Invalid license entry.")
         _validate_digest(entry.get("sha256"), str(entry.get("name")))
+    macos_build = data.get("macos_build")
+    if not isinstance(macos_build, dict) or not macos_build.get("binary_version"):
+        raise ValueError("macOS build must declare its exact binary version.")
     targets = data["targets"]
     assert isinstance(targets, dict)
     for name, raw in targets.items():
@@ -79,10 +121,22 @@ def validate_config(data: dict[str, object]) -> None:
             raise ValueError(f"Invalid target entry: {name}")
         if raw.get("source_kind") == "mirror":
             _validate_digest(raw.get("sha256"), name)
+            if not raw.get("source_version"):
+                raise ValueError(f"Mirror target {name} must declare source_version.")
             if raw.get("format") not in {"zip", "tar.xz"}:
                 raise ValueError(f"Unsupported archive format for {name}.")
         elif raw.get("source_kind") != "build":
             raise ValueError(f"Unsupported source kind for {name}.")
+
+
+def validate_macos_source_lock(data: dict[str, object]) -> None:
+    files = data.get("files")
+    if not isinstance(files, dict) or set(files) != MACOS_SOURCE_FILES:
+        raise ValueError(
+            f"macOS source lock must define exactly: {sorted(MACOS_SOURCE_FILES)}"
+        )
+    for name, digest in files.items():
+        _validate_digest(digest, str(name))
 
 
 def _download(url: str, destination: Path, expected_sha256: str) -> Path:
@@ -216,18 +270,40 @@ def _vmaf_graph(model: str, width: int, height: int) -> str:
     )
 
 
-def verify_target(target_name: str, bin_dir: Path, data: dict[str, object]) -> None:
+def _expected_binary_version(
+    target: dict[str, object], data: dict[str, object]
+) -> str:
+    if target["source_kind"] == "mirror":
+        return str(target["source_version"])
+    macos_build = data["macos_build"]
+    assert isinstance(macos_build, dict)
+    return str(macos_build["binary_version"])
+
+
+def verify_target(
+    target_name: str, bin_dir: Path, data: dict[str, object]
+) -> dict[str, object]:
     target = data["targets"][target_name]  # type: ignore[index]
     assert isinstance(target, dict)
     suffix = ".exe" if target["platform"] == "windows" else ""
     ffmpeg = bin_dir / f"ffmpeg{suffix}"
     ffprobe = bin_dir / f"ffprobe{suffix}"
+    architectures = {}
     for binary in (ffmpeg, ffprobe):
         actual = binary_architecture(binary)
         if actual != target["architecture"]:
             raise RuntimeError(f"{binary} is {actual}; expected {target['architecture']}")
+        architectures[binary.name] = actual
 
     version = _run([str(ffmpeg), "-hide_banner", "-version"])
+    first_line = version.splitlines()[0].split()
+    actual_version = first_line[2] if len(first_line) >= 3 else ""
+    expected_version = _expected_binary_version(target, data)
+    if actual_version != expected_version:
+        raise RuntimeError(
+            f"FFmpeg version is {actual_version or 'unparseable'}; "
+            f"expected {expected_version}."
+        )
     for option in ("--enable-gpl", "--enable-version3"):
         if option not in version:
             raise RuntimeError(f"FFmpeg is missing required configure option {option}.")
@@ -240,6 +316,7 @@ def verify_target(target_name: str, bin_dir: Path, data: dict[str, object]) -> N
             raise RuntimeError(f"FFmpeg is missing encoder {encoder}.")
     _run([str(ffprobe), "-hide_banner", "-version"])
 
+    vmaf_scores = {}
     for model, width, height in VMAF_MODELS:
         output = _run(
             [
@@ -261,8 +338,10 @@ def verify_target(target_name: str, bin_dir: Path, data: dict[str, object]) -> N
                 "-",
             ]
         )
-        if "VMAF score:" not in output:
+        scores = re.findall(r"VMAF score:\s*([0-9]+(?:\.[0-9]+)?)", output)
+        if not scores:
             raise RuntimeError(f"VMAF model {model} did not produce a score.")
+        vmaf_scores[model] = float(scores[-1])
 
     for encoder in ("libx265", "libsvtav1"):
         _run(
@@ -285,10 +364,33 @@ def verify_target(target_name: str, bin_dir: Path, data: dict[str, object]) -> N
             ]
         )
 
+    runtime_dependencies = {}
     if target["platform"] == "macos":
-        linkage = _run(["otool", "-L", str(ffmpeg)])
-        if "/opt/homebrew" in linkage or "/usr/local" in linkage:
-            raise RuntimeError("macOS FFmpeg has a package-manager runtime dependency.")
+        for binary in (ffmpeg, ffprobe):
+            linkage = _run(["otool", "-L", str(binary)])
+            dependencies = [
+                line.strip().split(" (", maxsplit=1)[0]
+                for line in linkage.splitlines()[1:]
+                if line.strip()
+            ]
+            unexpected = [
+                dependency
+                for dependency in dependencies
+                if not dependency.startswith(("/System/Library/", "/usr/lib/"))
+            ]
+            if unexpected:
+                raise RuntimeError(
+                    f"{binary} has non-system runtime dependencies: {unexpected}"
+                )
+            runtime_dependencies[binary.name] = dependencies
+
+    return {
+        "binary_version": actual_version,
+        "architectures": architectures,
+        "vmaf_scores": vmaf_scores,
+        "encoder_smokes": ["libx265", "libsvtav1"],
+        "runtime_dependencies": runtime_dependencies,
+    }
 
 
 def _copy_verified_url(entry: dict[str, object], destination: Path) -> None:
@@ -339,23 +441,144 @@ def package_target(
     return archive
 
 
+def _execution_context() -> dict[str, str]:
+    return {
+        "repository": os.environ.get("GITHUB_REPOSITORY", "local"),
+        "commit": os.environ.get("GITHUB_SHA", "local"),
+        "github_run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", "local"),
+        "runner_name": os.environ.get("RUNNER_NAME", "local"),
+        "runner_os": os.environ.get("RUNNER_OS", sys.platform),
+        "runner_arch": os.environ.get("RUNNER_ARCH", "local"),
+    }
+
+
+def write_verification_report(
+    target_name: str,
+    archive: Path,
+    data: dict[str, object],
+    observations: dict[str, object],
+) -> Path:
+    report = {
+        "schema_version": 1,
+        "target": target_name,
+        "archive": {"name": archive.name, "sha256": sha256_file(archive)},
+        "execution": _execution_context(),
+        "observed": observations,
+        "contract": {
+            "ffmpeg_version": data["ffmpeg_version"],
+            "vmaf_models": [model for model, _, _ in VMAF_MODELS],
+            "pixel_format": "yuv420p10le",
+            "cambi_metadata": True,
+            "encoders": ["libx265", "libsvtav1"],
+            "native_architecture": True,
+            "macos_system_linkage_only": target_name.startswith("macos-"),
+        },
+    }
+    report_path = archive.with_name(archive.name + ".verification.json")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return report_path
+
+
+def verify_and_package_target(
+    target_name: str,
+    bin_dir: Path,
+    output_dir: Path,
+    data: dict[str, object],
+) -> Path:
+    observations = verify_target(target_name, bin_dir, data)
+    archive = package_target(target_name, bin_dir, output_dir, data)
+    write_verification_report(target_name, archive, data, observations)
+    return archive
+
+
 def release_metadata(assets_dir: Path, output_dir: Path, data: dict[str, object]) -> None:
-    expected = {
-        f"ffmpeg-{data['bundle_version']}-{name}.{'zip' if raw['format'] == 'zip' else 'tar.xz'}"
+    target_archives = {
+        name: f"ffmpeg-{data['bundle_version']}-{name}."
+        f"{'zip' if raw['format'] == 'zip' else 'tar.xz'}"
         for name, raw in data["targets"].items()  # type: ignore[union-attr]
     }
+    expected_archives = set(target_archives.values())
+    expected_reports = {name + ".verification.json" for name in expected_archives}
+    expected = expected_archives | expected_reports
     found = {path.name for path in assets_dir.iterdir() if path.is_file()}
     if found != expected:
         raise RuntimeError(f"Release assets are {sorted(found)}; expected {sorted(expected)}")
     assets = [
         {"name": name, "sha256": sha256_file(assets_dir / name)} for name in sorted(found)
     ]
+    reports = []
+    release_execution = _execution_context()
+    for target_name, archive_name in sorted(target_archives.items()):
+        report_path = assets_dir / f"{archive_name}.verification.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        if report.get("schema_version") != 1 or report.get("target") != target_name:
+            raise RuntimeError(f"Invalid verification identity in {report_path.name}.")
+        archive = report.get("archive")
+        if not isinstance(archive, dict) or archive.get("name") != archive_name:
+            raise RuntimeError(f"Invalid verified archive in {report_path.name}.")
+        actual_digest = sha256_file(assets_dir / archive_name)
+        if archive.get("sha256") != actual_digest:
+            raise RuntimeError(f"Verification digest mismatch in {report_path.name}.")
+        execution = report.get("execution")
+        if not isinstance(execution, dict) or not all(
+            execution.get(key)
+            for key in ("repository", "commit", "github_run_id", "runner_os", "runner_arch")
+        ):
+            raise RuntimeError(f"Missing execution evidence in {report_path.name}.")
+        if release_execution["github_run_id"] != "local":
+            for key in (
+                "repository",
+                "commit",
+                "github_run_id",
+                "github_run_attempt",
+            ):
+                if execution.get(key) != release_execution[key]:
+                    raise RuntimeError(
+                        f"Execution {key} mismatch in {report_path.name}."
+                    )
+            expected_runner = EXPECTED_RUNNER_CONTEXT[target_name]
+            for key, expected_value in expected_runner.items():
+                if execution.get(key) != expected_value:
+                    raise RuntimeError(
+                        f"Execution {key} in {report_path.name} is "
+                        f"{execution.get(key)}; expected {expected_value}."
+                    )
+        observed = report.get("observed")
+        target = data["targets"][target_name]  # type: ignore[index]
+        assert isinstance(target, dict)
+        if not isinstance(observed, dict):
+            raise RuntimeError(f"Missing observations in {report_path.name}.")
+        if observed.get("binary_version") != _expected_binary_version(target, data):
+            raise RuntimeError(f"Binary version mismatch in {report_path.name}.")
+        architectures = observed.get("architectures")
+        if not isinstance(architectures, dict) or set(architectures.values()) != {
+            target["architecture"]
+        }:
+            raise RuntimeError(f"Architecture evidence mismatch in {report_path.name}.")
+        scores = observed.get("vmaf_scores")
+        if not isinstance(scores, dict) or set(scores) != {
+            model for model, _, _ in VMAF_MODELS
+        }:
+            raise RuntimeError(f"VMAF evidence mismatch in {report_path.name}.")
+        if observed.get("encoder_smokes") != ["libx265", "libsvtav1"]:
+            raise RuntimeError(f"Encoder evidence mismatch in {report_path.name}.")
+        reports.append(report)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "SHA256SUMS").write_text(
         "".join(f"{entry['sha256']}  {entry['name']}\n" for entry in assets),
         encoding="utf-8",
     )
-    provenance = {"schema_version": 1, "sources": data, "assets": assets}
+    provenance = {
+        "schema_version": 1,
+        "release_execution": release_execution,
+        "sources": data,
+        "macos_source_lock": load_macos_source_lock(),
+        "assets": assets,
+        "verification_reports": reports,
+    }
     (output_dir / "provenance.json").write_text(
         json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -365,14 +588,14 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build and validate pinned FFmpeg bundles.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("validate-config")
-    for name in ("fetch", "verify", "package"):
+    for name in ("fetch", "verify", "package", "verify-package"):
         command = subparsers.add_parser(name)
         command.add_argument("--target", required=True, choices=sorted(TARGETS))
         if name == "fetch":
             command.add_argument("--output", required=True, type=Path)
         else:
             command.add_argument("--bin-dir", required=True, type=Path)
-            if name == "package":
+            if name in {"package", "verify-package"}:
                 command.add_argument("--output", required=True, type=Path)
     metadata = subparsers.add_parser("release-metadata")
     metadata.add_argument("--assets-dir", required=True, type=Path)
@@ -384,6 +607,7 @@ def main() -> int:
     args = _parser().parse_args()
     data = load_config()
     validate_config(data)
+    validate_macos_source_lock(load_macos_source_lock())
     if args.command == "validate-config":
         return 0
     if args.command == "fetch":
@@ -392,6 +616,8 @@ def main() -> int:
         verify_target(args.target, args.bin_dir, data)
     elif args.command == "package":
         print(package_target(args.target, args.bin_dir, args.output, data))
+    elif args.command == "verify-package":
+        print(verify_and_package_target(args.target, args.bin_dir, args.output, data))
     else:
         release_metadata(args.assets_dir, args.output, data)
     return 0

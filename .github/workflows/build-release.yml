@@ -16,9 +16,9 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
       - name: Validate config and tests
@@ -42,32 +42,24 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
           architecture: ${{ matrix.architecture }}
-      - name: Install build bootstrap
-        run: python -m pip install virtualenv
-      - name: Build FFmpeg
-        shell: bash
-        run: python -c "from pathlib import Path; Path('workdir').mkdir()"
       - name: Run pinned macOS build
         shell: bash
         run: scripts/build_macos.sh workdir/macos-build
       - name: Verify and package
         shell: bash
         run: |
-          python scripts/bundle_tool.py verify \
-            --target "${{ matrix.target }}" \
-            --bin-dir workdir/macos-build/compile/out/bin
-          python scripts/bundle_tool.py package \
+          python scripts/bundle_tool.py verify-package \
             --target "${{ matrix.target }}" \
             --bin-dir workdir/macos-build/compile/out/bin \
             --output workdir/release
       - name: Upload bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bundle-${{ matrix.target }}
           path: workdir/release/*
@@ -95,9 +87,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
           architecture: ${{ matrix.architecture }}
@@ -105,10 +97,9 @@ jobs:
         run: python scripts/bundle_tool.py fetch --target "${{ matrix.target }}" --output workdir/fetched
       - name: Verify and package
         run: |
-          python scripts/bundle_tool.py verify --target "${{ matrix.target }}" --bin-dir workdir/fetched/bin
-          python scripts/bundle_tool.py package --target "${{ matrix.target }}" --bin-dir workdir/fetched/bin --output workdir/release
+          python scripts/bundle_tool.py verify-package --target "${{ matrix.target }}" --bin-dir workdir/fetched/bin --output workdir/release
       - name: Upload bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bundle-${{ matrix.target }}
           path: workdir/release/*
@@ -117,19 +108,19 @@ jobs:
   release:
     name: Publish atomic six-target release
     needs: [macos, btbntargets]
-    if: ${{ needs.macos.result == 'success' && needs.btbntargets.result == 'success' }}
+    if: github.ref == 'refs/heads/main' && needs.macos.result == 'success' && needs.btbntargets.result == 'success'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
       - name: Download target bundles
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: bundle-*
           path: workdir/assets
@@ -139,16 +130,52 @@ jobs:
           python scripts/bundle_tool.py release-metadata --assets-dir workdir/assets --output workdir/metadata
           cp workdir/metadata/SHA256SUMS workdir/assets/SHA256SUMS
           cp workdir/metadata/provenance.json workdir/assets/provenance.json
-      - name: Create immutable release
+      - name: Create and verify draft release before publication
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "release publication is restricted to main" >&2
+            exit 1
+          fi
           tag="$(python -c 'import json; print(json.load(open("config/sources.json"))["release_tag"])')"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "release already exists: $tag" >&2
             exit 1
           fi
-          gh release create "$tag" --target "$GITHUB_SHA" \
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "tag already exists: $tag" >&2
+            exit 1
+          fi
+
+          draft_created=false
+          published=false
+          cleanup_draft() {
+            if [[ "$draft_created" == true && "$published" != true ]]; then
+              release_state="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+                --jq '[.draft, .target_commitish] | @tsv' 2>/dev/null || true)"
+              if [[ "$release_state" == $'true\t'"$GITHUB_SHA" ]]; then
+                gh release delete "$tag" --yes --cleanup-tag >/dev/null 2>&1 || true
+              else
+                echo "refusing to clean a draft not owned by this run: $release_state" >&2
+              fi
+            fi
+          }
+          trap cleanup_draft EXIT
+
+          gh release create "$tag" --target "$GITHUB_SHA" --draft \
             --title "$tag" \
-            --notes "Six-target FFmpeg 9.0.1 bundle with VMAF v1.0.16 exact native smoke validation." \
-            workdir/assets/*
+            --notes "Six-target FFmpeg 9.0.1 bundle with VMAF v1.0.16 exact native smoke validation."
+          draft_created=true
+          gh release upload "$tag" workdir/assets/*
+
+          mkdir -p workdir/remote-assets
+          gh release download "$tag" --dir workdir/remote-assets
+          (cd workdir/assets && sha256sum * | sort) > workdir/local-release-sha256
+          (cd workdir/remote-assets && sha256sum * | sort) > workdir/remote-release-sha256
+          diff -u workdir/local-release-sha256 workdir/remote-release-sha256
+
+          gh release edit "$tag" --draft=false
+          published=true

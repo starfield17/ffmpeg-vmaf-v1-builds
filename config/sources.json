@@ -20,6 +20,7 @@
     "provider": "Martin Riedl build-script with repository patch",
     "repository": "https://git.martin-riedl.de/ffmpeg/build-script.git",
     "commit": "f63b8aab8f5ce1a067da86ba69e34a36a7e217e5",
+    "binary_version": "9.0.1-https://www.martin-riedl.de",
     "ffmpeg_source": "https://github.com/FFmpeg/FFmpeg/tree/n9.0.1",
     "libvmaf_source": "https://github.com/Netflix/vmaf/tree/v3.2.0"
   },

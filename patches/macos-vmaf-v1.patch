@@ -1,3 +1,17 @@
+diff --git a/script/build-cmake.sh b/script/build-cmake.sh
+index 4c7fc37..ac11d92 100755
+--- a/script/build-cmake.sh
++++ b/script/build-cmake.sh
+@@ -31,9 +31 @@ VERSION_PATCH="4.0.3"
+-# detect existing installation of cmake
+-CURRENT_VERSION=$(cmake --version | grep -m 1 "" |  sed -r 's/.*([0-9]+\.[0-9]+\.[0-9]+)/\1/')
+-echo "detected installed version of cmake: $CURRENT_VERSION"
+-if [ "$CURRENT_VERSION" = "$VERSION_PATCH" ]; then
+-    echo "cmake already in current version available"
+-    exit 0
+-fi
+-
+ # start in working directory
 diff --git a/script/build-libvmaf.sh b/script/build-libvmaf.sh
 index 5d9de45..6a99be9 100755
 --- a/script/build-libvmaf.sh
@@ -12,3 +26,62 @@ index 5d9de45..6a99be9 100755
  checkStatus $? "configuration failed"
  
  # build
+diff --git a/script/functions.sh b/script/functions.sh
+index 87c7f62..23b5e9c 100755
+--- a/script/functions.sh
++++ b/script/functions.sh
+@@ -45,22 +45,39 @@ echoDurationInSections(){
+ download(){
+     URL=$1
+     NAME=$2
+-    curl -o "$NAME" -L -f "$URL"
++    if [ -z "${VMAF_SOURCE_LOCK:-}" ]; then
++        echo "VMAF_SOURCE_LOCK is required"
++        return 1
++    fi
++    EXPECTED_SHA256=$(python3 - "$VMAF_SOURCE_LOCK" "$NAME" <<'PY'
++import json
++import sys
++
++with open(sys.argv[1], encoding="utf-8") as handle:
++    files = json.load(handle)["files"]
++try:
++    print(files[sys.argv[2]])
++except KeyError:
++    print(f"unlocked build input: {sys.argv[2]}", file=sys.stderr)
++    raise SystemExit(1)
++PY
++    ) || return 1
++    curl -o "$NAME" -L -f "$URL" || return 1
++    ACTUAL_SHA256=$(shasum -a 256 "$NAME" | awk '{print $1}')
++    if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
++        echo "SHA-256 mismatch for $NAME: expected $EXPECTED_SHA256, got $ACTUAL_SHA256"
++        rm -f "$NAME"
++        return 1
++    fi
+ }
+
+ prepareMeson(){
+-    python3 -m virtualenv .venv
++    python3 -m venv .venv
+-    if [ $? -ne 0 ]; then
+-        echo "python create virtual environment failed"
+-
+-        # check, if meson is natively available
+-        MESON_VERSION=$(meson -v 2> /dev/null)
+-        checkStatus $? "meson was also not found: please install python correctly with virtualenv"
+-        echo "using meson $MESON_VERSION"
+-    else
+-        . .venv/bin/activate
+-        checkStatus $? "python activate virtual environment failed"
+-        pip install meson
+-        checkStatus $? "python meson installation failed"
+-    fi
++    checkStatus $? "python create virtual environment failed"
++    . .venv/bin/activate
++    checkStatus $? "python activate virtual environment failed"
++    download https://files.pythonhosted.org/packages/07/68/b0117422eb0a46d9d8d9e328f0c5b5c835179bfc058688bca35c90c89eba/meson-1.12.0-py3-none-any.whl "meson.whl"
++    checkStatus $? "python meson download failed"
++    pip install --no-deps ./meson.whl
++    checkStatus $? "python meson installation failed"
+ }

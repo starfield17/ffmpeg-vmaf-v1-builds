@@ -3,9 +3,10 @@
 ## Purpose and map
 
 This repository produces the pinned FFmpeg dependency bundles consumed by
-Video Compressor. `config/sources.json` is the source-of-truth for upstream
-inputs and release identity. `scripts/` owns fetch, validation, packaging, and
-the macOS source build. `patches/` contains narrowly scoped upstream patches.
+Video Compressor. `config/sources.json` is the source-of-truth for release and
+mirror inputs; `config/macos-source-lock.json` locks every macOS download.
+`scripts/` owns fetch, validation, packaging, and the macOS source build.
+`patches/` contains narrowly scoped upstream patches.
 
 ## Invariants
 
@@ -27,4 +28,3 @@ python -m compileall -q scripts test
 python -m unittest discover -s test -p "test_*.py" -v
 python scripts/bundle_tool.py validate-config
 ```
-

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "files": {
+    "SDL2.tar.gz": "5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165",
+    "SVT-AV1.tar.gz": "d0d73bfea42fdcc1222272bf2b0e2319e9df5574721298090c3d28315586ecb1",
+    "cmake-release.tar.gz": "4e85de4daf1c3e82d7dc6b8ba5683972944b466343aeb9c327a742437bb3ce9a",
+    "ffmpeg.tar.bz2": "3317ad21d5e2c2eab8423ae6f49b12463960055925f39a025496964afeb9042c",
+    "fontconfig.tar.xz": "9f5cae93f4fffc1fbc05ae99cdfc708cd60dfd6612ffc0512827025c026fa541",
+    "freetype.tar.gz": "a7aca0e532a276ea8d85bd31149f0a74c33d19c8d287116ef8f5f8357b4f1f80",
+    "fribidi.tar.xz": "1b1cde5b235d40479e91be2f0e88a309e3214c8ab470ec8a2744d82a5a9ea05c",
+    "harfbuzz.tar.xz": "16070d77cfc4ba1f1e7327e83bf9b3f55898081cabdb94e56a33e04fc8874eae",
+    "libass.tar.gz": "caab4b993dd7be6187c55623b789ed75dddefea6e65938af134637c732fe094a",
+    "libogg.tar.gz": "83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638",
+    "libvmaf.tar.gz": "a28f93f3b4fa65601be324587072e32a6a704a304ba7b1aec9b70b3f709bc1dc",
+    "libxml2.tar.xz": "78262a6e7ac170d6528ebfe2efccdf220191a5af6a6cd61ea4a9a9a5042c7a07",
+    "meson.whl": "71f133147fa0fcfe8f4df49fa1045771064947834538409e5d97b3613aac8b4e",
+    "nasm.tar.gz": "f504227b2f529e658d41629075f0503b38d67d790af345f34eba4af60c6a5998",
+    "ninja.tar.gz": "974d6b2f4eeefa25625d34da3cb36bdcebe7fbce40f4c16ac0835fd1c0cbae17",
+    "openssl.tar.gz": "b1bfedcd5b289ff22aee87c9d600f515767ebf45f77168cb6d64f231f518a82e",
+    "pkg-config.tar.gz": "6fc69c01688c9458a57eb9a1664c9aba372ccda420a02bf4429fe610e7e7d591",
+    "x265.tar.gz": "0a3d41f6b4e2fe5a49d783d6631bd1a49c44cdf999074a3ff09e2cb71ac8ed33",
+    "zlib.tar.gz": "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
+  }
+}

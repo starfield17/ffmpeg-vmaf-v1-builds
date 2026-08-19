@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.bundle_tool import (
+    EXPECTED_RUNNER_CONTEXT,
+    MACOS_SOURCE_FILES,
     TARGETS,
     VMAF_MODELS,
     _vmaf_graph,
     extract_binaries,
     load_config,
+    load_macos_source_lock,
+    release_metadata,
     validate_config,
+    validate_macos_source_lock,
+    write_verification_report,
 )
 
 
@@ -19,9 +27,21 @@ class BundleConfigTestCase(unittest.TestCase):
     def test_config_has_six_targets_and_pinned_release(self) -> None:
         data = load_config()
         validate_config(data)
-        self.assertEqual(set(data["targets"]), TARGETS)
+        targets = data["targets"]
+        self.assertIsInstance(targets, dict)
+        assert isinstance(targets, dict)
+        self.assertEqual(set(targets), TARGETS)
         self.assertEqual(data["release_tag"], "ffmpeg-9.0.1-vmaf-v1.0.16-r1")
-        self.assertEqual(data["targets"]["windows-x86_64"]["sha256"][:8], "2b17b617")
+        macos_build = data["macos_build"]
+        self.assertIsInstance(macos_build, dict)
+        assert isinstance(macos_build, dict)
+        self.assertEqual(
+            macos_build["binary_version"], "9.0.1-https://www.martin-riedl.de"
+        )
+        windows = targets["windows-x86_64"]
+        self.assertIsInstance(windows, dict)
+        assert isinstance(windows, dict)
+        self.assertEqual(str(windows["sha256"])[:8], "2b17b617")
 
     def test_production_model_contract_is_exact(self) -> None:
         self.assertEqual(
@@ -48,6 +68,18 @@ class BundleConfigTestCase(unittest.TestCase):
         ):
             self.assertIn(token, graph)
 
+    def test_macos_source_lock_is_complete_and_hash_pinned(self) -> None:
+        source_lock = load_macos_source_lock()
+        validate_macos_source_lock(source_lock)
+        files = source_lock["files"]
+        self.assertIsInstance(files, dict)
+        assert isinstance(files, dict)
+        self.assertEqual(set(files), MACOS_SOURCE_FILES)
+        self.assertEqual(
+            files["ffmpeg.tar.bz2"],
+            "3317ad21d5e2c2eab8423ae6f49b12463960055925f39a025496964afeb9042c",
+        )
+
     def test_archive_extraction_only_accepts_expected_binary_names(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -62,6 +94,110 @@ class BundleConfigTestCase(unittest.TestCase):
                 {path.name for path in (output / "bin").iterdir()}, {"ffmpeg", "ffprobe"}
             )
 
+    def test_release_metadata_requires_six_matching_verification_reports(self) -> None:
+        data = load_config()
+        targets = data["targets"]
+        assert isinstance(targets, dict)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            assets = root / "assets"
+            assets.mkdir()
+            for target_name, raw in targets.items():
+                assert isinstance(raw, dict)
+                extension = "zip" if raw["format"] == "zip" else "tar.xz"
+                archive = assets / (
+                    f"ffmpeg-{data['bundle_version']}-{target_name}.{extension}"
+                )
+                archive.write_bytes(target_name.encode("ascii"))
+                target = targets[target_name]
+                assert isinstance(target, dict)
+                source_version = (
+                    target["source_version"]
+                    if target["source_kind"] == "mirror"
+                    else "9.0.1-https://www.martin-riedl.de"
+                )
+                runner = EXPECTED_RUNNER_CONTEXT[target_name]
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "GITHUB_REPOSITORY": "starfield17/test-builds",
+                        "GITHUB_SHA": "a" * 40,
+                        "GITHUB_RUN_ID": "42",
+                        "GITHUB_RUN_ATTEMPT": "1",
+                        "RUNNER_NAME": f"runner-{target_name}",
+                        "RUNNER_OS": runner["runner_os"],
+                        "RUNNER_ARCH": runner["runner_arch"],
+                    },
+                    clear=True,
+                ):
+                    write_verification_report(
+                        target_name,
+                        archive,
+                        data,
+                        {
+                            "binary_version": source_version,
+                            "architectures": {
+                                "ffmpeg": target["architecture"],
+                                "ffprobe": target["architecture"],
+                            },
+                            "vmaf_scores": {
+                                model: 100.0 for model, _, _ in VMAF_MODELS
+                            },
+                            "encoder_smokes": ["libx265", "libsvtav1"],
+                            "runtime_dependencies": {},
+                        },
+                    )
+
+            metadata = root / "metadata"
+            with patch.dict(
+                "os.environ",
+                {
+                    "GITHUB_REPOSITORY": "starfield17/test-builds",
+                    "GITHUB_SHA": "a" * 40,
+                    "GITHUB_RUN_ID": "42",
+                    "GITHUB_RUN_ATTEMPT": "1",
+                    "RUNNER_NAME": "release-runner",
+                    "RUNNER_OS": "Linux",
+                    "RUNNER_ARCH": "X64",
+                },
+                clear=True,
+            ):
+                release_metadata(assets, metadata, data)
+            provenance = json.loads(
+                (metadata / "provenance.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(provenance["verification_reports"]), 6)
+            self.assertEqual(
+                set(provenance["macos_source_lock"]["files"]), MACOS_SOURCE_FILES
+            )
+            self.assertEqual(
+                len((metadata / "SHA256SUMS").read_text(encoding="utf-8").splitlines()),
+                12,
+            )
+
+            report_path = next(assets.glob("*linux-arm64*.verification.json"))
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["execution"]["runner_arch"] = "X64"
+            report_path.write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "GITHUB_REPOSITORY": "starfield17/test-builds",
+                        "GITHUB_SHA": "a" * 40,
+                        "GITHUB_RUN_ID": "42",
+                        "GITHUB_RUN_ATTEMPT": "1",
+                        "RUNNER_OS": "Linux",
+                        "RUNNER_ARCH": "X64",
+                    },
+                    clear=True,
+                ),
+                self.assertRaisesRegex(RuntimeError, "runner_arch"),
+            ):
+                release_metadata(assets, root / "rejected", data)
+
     def test_release_workflow_uses_all_native_runners_and_atomic_publish(self) -> None:
         workflow = (
             Path(__file__).resolve().parent.parent / ".github/workflows/build-release.yml"
@@ -75,9 +211,36 @@ class BundleConfigTestCase(unittest.TestCase):
             "ubuntu-24.04-arm",
             "needs: [macos, btbntargets]",
             "release-metadata",
-            "gh release create",
+            "github.ref == 'refs/heads/main'",
+            "gh release create \"$tag\" --target \"$GITHUB_SHA\" --draft",
+            "gh release download",
+            "diff -u workdir/local-release-sha256 workdir/remote-release-sha256",
+            "gh release edit \"$tag\" --draft=false",
+            "draft_created=true",
+            "refusing to clean a draft not owned by this run",
+            "--cleanup-tag",
         ):
             self.assertIn(token, workflow)
+        self.assertNotIn("actions/checkout@v", workflow)
+        self.assertNotIn("actions/setup-python@v", workflow)
+        self.assertNotIn("actions/upload-artifact@v", workflow)
+        self.assertNotIn("actions/download-artifact@v", workflow)
+
+    def test_macos_patch_enforces_locked_inputs_and_float_features(self) -> None:
+        patch = (
+            Path(__file__).resolve().parent.parent / "patches/macos-vmaf-v1.patch"
+        ).read_text(encoding="utf-8")
+        for token in (
+            "-# detect existing installation of cmake",
+            "VMAF_SOURCE_LOCK is required",
+            "unlocked build input",
+            "SHA-256 mismatch",
+            "meson-1.12.0-py3-none-any.whl",
+            "-Dbuilt_in_models=true -Denable_float=true",
+        ):
+            self.assertIn(token, patch)
+        self.assertNotIn("+    python3 -m virtualenv", patch)
+        self.assertNotIn("+        MESON_VERSION=$(meson -v", patch)
 
 
 if __name__ == "__main__":

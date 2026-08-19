@@ -7,7 +7,10 @@ if [[ $# -ne 1 ]]; then
 fi
 
 repository_root="$(cd "$(dirname "$0")/.." && pwd)"
-build_root="$1"
+build_parent="$(dirname "$1")"
+build_name="$(basename "$1")"
+mkdir -p "$build_parent"
+build_root="$(cd "$build_parent" && pwd)/$build_name"
 recipe_root="$build_root/recipe"
 compile_root="$build_root/compile"
 upstream_commit="f63b8aab8f5ce1a067da86ba69e34a36a7e217e5"
@@ -25,6 +28,7 @@ git -C "$recipe_root" apply "$repository_root/patches/macos-vmaf-v1.patch"
 
 mkdir "$compile_root"
 cd "$compile_root"
+export VMAF_SOURCE_LOCK="$repository_root/config/macos-source-lock.json"
 "$recipe_root/build.sh" \
     -SKIP_TEST=YES \
     -SKIP_LIBBLURAY=YES \

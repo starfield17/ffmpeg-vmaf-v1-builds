@@ -20,10 +20,13 @@ Every target must provide:
 The repository orchestration is MIT-licensed. Released FFmpeg GPL bundles are
 distributed under their included upstream license notices. Source provenance,
 archive SHA-256 values, and upstream inputs are attached to every release.
+The macOS build rejects any source download not listed in
+`config/macos-source-lock.json`, and every GitHub Action is pinned by commit.
 
 ## Release
 
 Run the **Build and release bundles** workflow manually. It creates the exact
 tag declared by `config/sources.json` only after all six native validation jobs
-succeed. Existing tags and releases are never replaced.
-
+succeed. It uploads to a draft, downloads and compares every published asset,
+and only then makes the Release public. Existing tags and releases are never
+replaced.
