@@ -80,8 +80,8 @@ index 87c7f62..23b5e9c 100755
 +    checkStatus $? "python create virtual environment failed"
 +    . .venv/bin/activate
 +    checkStatus $? "python activate virtual environment failed"
-+    download https://files.pythonhosted.org/packages/07/68/b0117422eb0a46d9d8d9e328f0c5b5c835179bfc058688bca35c90c89eba/meson-1.12.0-py3-none-any.whl "meson.whl"
++    download https://files.pythonhosted.org/packages/07/68/b0117422eb0a46d9d8d9e328f0c5b5c835179bfc058688bca35c90c89eba/meson-1.12.0-py3-none-any.whl "meson-1.12.0-py3-none-any.whl"
 +    checkStatus $? "python meson download failed"
-+    pip install --no-deps ./meson.whl
++    pip install --no-deps ./meson-1.12.0-py3-none-any.whl
 +    checkStatus $? "python meson installation failed"
  }

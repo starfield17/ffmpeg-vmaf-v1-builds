@@ -33,7 +33,7 @@ MACOS_SOURCE_FILES = {
     "libogg.tar.gz",
     "libvmaf.tar.gz",
     "libxml2.tar.xz",
-    "meson.whl",
+    "meson-1.12.0-py3-none-any.whl",
     "nasm.tar.gz",
     "ninja.tar.gz",
     "openssl.tar.gz",
