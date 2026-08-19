@@ -10,8 +10,10 @@ from unittest.mock import patch
 from scripts.bundle_tool import (
     EXPECTED_RUNNER_CONTEXT,
     MACOS_SOURCE_FILES,
+    REQUIRED_FILTERS,
     TARGETS,
     VMAF_MODELS,
+    _parse_filter_names,
     _parse_vmaf_score,
     _vmaf_graph,
     extract_binaries,
@@ -32,8 +34,8 @@ class BundleConfigTestCase(unittest.TestCase):
         self.assertIsInstance(targets, dict)
         assert isinstance(targets, dict)
         self.assertEqual(set(targets), TARGETS)
-        self.assertEqual(data["release_tag"], "ffmpeg-9.0.1-vmaf-v1.0.16-r2")
-        self.assertEqual(data["verification_contract_version"], 2)
+        self.assertEqual(data["release_tag"], "ffmpeg-9.0.1-vmaf-v1.0.16-r3")
+        self.assertEqual(data["verification_contract_version"], 3)
         licenses = data["licenses"]
         self.assertIsInstance(licenses, list)
         assert isinstance(licenses, list)
@@ -110,6 +112,18 @@ class BundleConfigTestCase(unittest.TestCase):
             ):
                 _parse_vmaf_score(f"VMAF score: {score}", "model")
 
+    def test_filter_parser_matches_exact_capability_names(self) -> None:
+        output = """
+            .. libvmaf           VV->V      Calculate VMAF.
+            .. siti              V->V       Calculate SI/TI.
+            .. scdet             V->V       Detect scene changes.
+            .. notsiti           V->V       Unrelated filter.
+        """
+        names = _parse_filter_names(output)
+        self.assertTrue(set(REQUIRED_FILTERS).issubset(names))
+        self.assertNotIn("notsc det", names)
+        self.assertNotIn("not", names)
+
     def test_macos_source_lock_is_complete_and_hash_pinned(self) -> None:
         source_lock = load_macos_source_lock()
         validate_macos_source_lock(source_lock)
@@ -181,6 +195,17 @@ class BundleConfigTestCase(unittest.TestCase):
                             "architectures": {
                                 "ffmpeg": target["architecture"],
                                 "ffprobe": target["architecture"],
+                            },
+                            "required_filters": list(REQUIRED_FILTERS),
+                            "available_filters": list(REQUIRED_FILTERS),
+                            "scout_smoke": {
+                                "frames": 12,
+                                "si_samples": 12,
+                                "ti_samples": 12,
+                                "si_max": 184.31,
+                                "ti_max": 56.74,
+                                "scene_score_max": 57.681,
+                                "scene_times": [0.5],
                             },
                             "vmaf_scores": {
                                 model: 100.0 for model, *_ in VMAF_MODELS

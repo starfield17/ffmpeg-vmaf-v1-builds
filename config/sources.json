@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "verification_contract_version": 2,
-  "bundle_version": "9.0.1-vmaf-v1.0.16-r2",
-  "release_tag": "ffmpeg-9.0.1-vmaf-v1.0.16-r2",
+  "verification_contract_version": 3,
+  "bundle_version": "9.0.1-vmaf-v1.0.16-r3",
+  "release_tag": "ffmpeg-9.0.1-vmaf-v1.0.16-r3",
   "ffmpeg_version": "9.0.1",
   "vmaf_model_version": "1.0.16",
   "licenses": [

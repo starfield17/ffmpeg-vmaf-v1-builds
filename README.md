@@ -19,6 +19,9 @@ Every target must provide:
 - CPU `libvmaf` capable of running all four pinned VMAF v1.0.16 production
   models through 30/60 fps multi-frame probes, SAR-aware 10-bit display
   normalization, and CAMBI encode metadata.
+- Exact `libvmaf`, `siti`, and `scdet` filters. Native verification also runs a
+  synthetic Scout smoke that proves SI, TI, and scene-boundary metadata are
+  emitted before a bundle can be released.
 
 The repository orchestration is MIT-licensed. Released FFmpeg GPL bundles are
 distributed under their included upstream license notices. Source provenance,

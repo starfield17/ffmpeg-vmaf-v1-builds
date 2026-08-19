@@ -73,6 +73,10 @@ EXPECTED_RUNNER_CONTEXT = {
     "linux-arm64": {"runner_os": "Linux", "runner_arch": "ARM64"},
     "macos-arm64": {"runner_os": "macOS", "runner_arch": "ARM64"},
 }
+REQUIRED_FILTERS = ("libvmaf", "siti", "scdet")
+_FILTER_LINE_RE = re.compile(
+    r"^\s*[TSC.]{2,3}\s+([A-Za-z0-9_]+)\s+"
+)
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict[str, object]:
@@ -117,8 +121,8 @@ def _validate_commit(value: object, label: str) -> str:
 def validate_config(data: dict[str, object]) -> None:
     if data.get("release_tag") != "ffmpeg-" + str(data.get("bundle_version")):
         raise ValueError("release_tag must be ffmpeg-<bundle_version>.")
-    if data.get("verification_contract_version") != 2:
-        raise ValueError("verification_contract_version must be 2.")
+    if data.get("verification_contract_version") != 3:
+        raise ValueError("verification_contract_version must be 3.")
     licenses = data.get("licenses")
     if not isinstance(licenses, list) or len(licenses) != 3:
         raise ValueError("Exactly three FFmpeg and VMAF license inputs are required.")
@@ -335,6 +339,79 @@ def _parse_vmaf_score(output: str, model: str) -> float:
     return score
 
 
+def _parse_filter_names(output: str) -> set[str]:
+    """Parse exact filter names from ``ffmpeg -filters`` capability rows."""
+    names: set[str] = set()
+    for line in output.splitlines():
+        match = _FILTER_LINE_RE.match(line)
+        if match:
+            names.add(match.group(1))
+    return names
+
+
+def _parse_scout_values(output: str, key: str) -> list[float]:
+    values: list[float] = []
+    pattern = re.compile(
+        rf"lavfi\.{re.escape(key)}\s*[=:]\s*"
+        r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+    )
+    for raw in pattern.findall(output):
+        value = float(raw)
+        if not math.isfinite(value):
+            raise RuntimeError(f"Scout produced non-finite {key} metadata.")
+        values.append(value)
+    return values
+
+
+def _verify_scout_smoke(ffmpeg: Path) -> dict[str, object]:
+    """Exercise SI, TI, and a real scene boundary on a tiny synthetic stream."""
+    output = _run(
+        [
+            str(ffmpeg),
+            "-hide_banner",
+            "-loglevel",
+            "info",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=64x64:rate=12:duration=0.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=white:size=64x64:rate=12:duration=0.5",
+            "-filter_complex",
+            "[0:v][1:v]concat=n=2:v=1:a=0,siti,"
+            "scdet=threshold=10,metadata=mode=print:file=-",
+            "-frames:v",
+            "12",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+    si_values = _parse_scout_values(output, "siti.si")
+    ti_values = _parse_scout_values(output, "siti.ti")
+    scene_scores = _parse_scout_values(output, "scd.score")
+    scene_times = _parse_scout_values(output, "scd.time")
+    if len(si_values) < 2 or len(ti_values) < 2:
+        raise RuntimeError("Scout smoke did not produce enough SI/TI metadata.")
+    if not any(value > 0.0 for value in si_values):
+        raise RuntimeError("Scout smoke produced no positive SI metadata.")
+    if not any(value > 0.0 for value in ti_values[1:]):
+        raise RuntimeError("Scout smoke produced no positive TI metadata.")
+    if not scene_scores or max(scene_scores) < 10.0 or not scene_times:
+        raise RuntimeError("Scout smoke did not produce a valid scene boundary.")
+    return {
+        "frames": 12,
+        "si_samples": len(si_values),
+        "ti_samples": len(ti_values),
+        "si_max": max(si_values),
+        "ti_max": max(ti_values),
+        "scene_score_max": max(scene_scores),
+        "scene_times": scene_times,
+    }
+
+
 def _verify_anamorphic_normalization(ffmpeg: Path) -> dict[str, object]:
     output = _run(
         [
@@ -409,8 +486,13 @@ def verify_target(
         if option not in version:
             raise RuntimeError(f"FFmpeg is missing required configure option {option}.")
     filters = _run([str(ffmpeg), "-hide_banner", "-filters"])
-    if "libvmaf" not in filters:
-        raise RuntimeError("FFmpeg is missing libvmaf.")
+    available_filters = _parse_filter_names(filters)
+    missing_filters = sorted(set(REQUIRED_FILTERS) - available_filters)
+    if missing_filters:
+        raise RuntimeError(
+            "FFmpeg is missing required filters: " + ", ".join(missing_filters)
+        )
+    scout_smoke = _verify_scout_smoke(ffmpeg)
     encoders = _run([str(ffmpeg), "-hide_banner", "-encoders"])
     for encoder in ("libx265", "libsvtav1"):
         if encoder not in encoders:
@@ -492,6 +574,9 @@ def verify_target(
     return {
         "binary_version": actual_version,
         "architectures": architectures,
+        "required_filters": list(REQUIRED_FILTERS),
+        "available_filters": sorted(available_filters),
+        "scout_smoke": scout_smoke,
         "vmaf_scores": vmaf_scores,
         "vmaf_probes": vmaf_probes,
         "anamorphic_normalization": anamorphic_normalization,
@@ -568,7 +653,7 @@ def write_verification_report(
     observations: dict[str, object],
 ) -> Path:
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "target": target_name,
         "archive": {"name": archive.name, "sha256": sha256_file(archive)},
         "execution": _execution_context(),
@@ -576,6 +661,8 @@ def write_verification_report(
         "contract": {
             "ffmpeg_version": data["ffmpeg_version"],
             "verification_contract_version": data["verification_contract_version"],
+            "required_filters": list(REQUIRED_FILTERS),
+            "scout_smoke": True,
             "vmaf_models": [model for model, *_ in VMAF_MODELS],
             "vmaf_probe_frames": {
                 model: {"fps": fps, "frames": frames}
@@ -629,12 +716,14 @@ def release_metadata(assets_dir: Path, output_dir: Path, data: dict[str, object]
     for target_name, archive_name in sorted(target_archives.items()):
         report_path = assets_dir / f"{archive_name}.verification.json"
         report = json.loads(report_path.read_text(encoding="utf-8"))
-        if report.get("schema_version") != 2 or report.get("target") != target_name:
+        if report.get("schema_version") != 3 or report.get("target") != target_name:
             raise RuntimeError(f"Invalid verification identity in {report_path.name}.")
         contract = report.get("contract")
         if (
             not isinstance(contract, dict)
-            or contract.get("verification_contract_version") != 2
+            or contract.get("verification_contract_version") != 3
+            or contract.get("required_filters") != list(REQUIRED_FILTERS)
+            or contract.get("scout_smoke") is not True
             or set(contract.get("licenses", [])) != LICENSE_NAMES
             or contract.get("anamorphic_normalization") is not True
         ):
@@ -674,6 +763,26 @@ def release_metadata(assets_dir: Path, output_dir: Path, data: dict[str, object]
         assert isinstance(target, dict)
         if not isinstance(observed, dict):
             raise RuntimeError(f"Missing observations in {report_path.name}.")
+        if observed.get("required_filters") != list(REQUIRED_FILTERS):
+            raise RuntimeError(f"Required filter evidence mismatch in {report_path.name}.")
+        available_filters = observed.get("available_filters")
+        if not isinstance(available_filters, list) or any(
+            not isinstance(value, str) for value in available_filters
+        ) or not set(REQUIRED_FILTERS).issubset(available_filters):
+            raise RuntimeError(f"Required filter evidence mismatch in {report_path.name}.")
+        scout_smoke = observed.get("scout_smoke")
+        if not isinstance(scout_smoke, dict):
+            raise RuntimeError(f"Missing Scout smoke evidence in {report_path.name}.")
+        for key in ("si_max", "ti_max", "scene_score_max"):
+            value = scout_smoke.get(key)
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise RuntimeError(f"Invalid Scout smoke evidence in {report_path.name}.")
+        scene_times = scout_smoke.get("scene_times")
+        if not isinstance(scene_times, list) or not scene_times or any(
+            not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0
+            for value in scene_times
+        ):
+            raise RuntimeError(f"Invalid Scout smoke evidence in {report_path.name}.")
         if observed.get("binary_version") != _expected_binary_version(target, data):
             raise RuntimeError(f"Binary version mismatch in {report_path.name}.")
         architectures = observed.get("architectures")
