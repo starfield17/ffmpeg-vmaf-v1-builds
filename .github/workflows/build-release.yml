@@ -33,9 +33,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: macos-x86_64
-            runner: macos-15-intel
-            architecture: x64
           - target: macos-arm64
             runner: macos-15
             architecture: arm64
@@ -106,7 +103,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish atomic six-target release
+    name: Publish atomic five-target release
     needs: [macos, btbntargets]
     if: github.ref == 'refs/heads/main' && needs.macos.result == 'success' && needs.btbntargets.result == 'success'
     runs-on: ubuntu-22.04
@@ -167,7 +164,7 @@ jobs:
 
           gh release create "$tag" --target "$GITHUB_SHA" --draft \
             --title "$tag" \
-            --notes "Six-target FFmpeg 9.0.1 bundle with VMAF v1.0.16 exact native smoke validation."
+            --notes "Five-target FFmpeg 9.0.1 bundle with VMAF v1.0.16 exact native smoke validation. Intel macOS is not supported."
           draft_created=true
           gh release upload "$tag" workdir/assets/*
 

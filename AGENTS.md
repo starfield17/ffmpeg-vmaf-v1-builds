@@ -17,7 +17,7 @@ mirror inputs; `config/macos-source-lock.json` locks every macOS download.
   BtbN provenance and are mirrored only after SHA-256 and native validation.
 - All upstream commits, URLs, and hashes are pinned. Do not use floating
   `latest` downloads or model aliases.
-- A release is an atomic six-target set. One failed target blocks publication.
+- A release is an atomic five-target set. One failed target blocks publication.
 - Keep build-provider details out of the verifier; it validates the common
   runtime contract from the normalized `bin/` directory.
 

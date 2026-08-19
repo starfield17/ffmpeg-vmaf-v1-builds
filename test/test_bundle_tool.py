@@ -24,7 +24,7 @@ from scripts.bundle_tool import (
 
 
 class BundleConfigTestCase(unittest.TestCase):
-    def test_config_has_six_targets_and_pinned_release(self) -> None:
+    def test_config_has_five_targets_and_pinned_release(self) -> None:
         data = load_config()
         validate_config(data)
         targets = data["targets"]
@@ -97,7 +97,7 @@ class BundleConfigTestCase(unittest.TestCase):
                 {path.name for path in (output / "bin").iterdir()}, {"ffmpeg", "ffprobe"}
             )
 
-    def test_release_metadata_requires_six_matching_verification_reports(self) -> None:
+    def test_release_metadata_requires_five_matching_verification_reports(self) -> None:
         data = load_config()
         targets = data["targets"]
         assert isinstance(targets, dict)
@@ -169,13 +169,13 @@ class BundleConfigTestCase(unittest.TestCase):
             provenance = json.loads(
                 (metadata / "provenance.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(len(provenance["verification_reports"]), 6)
+            self.assertEqual(len(provenance["verification_reports"]), 5)
             self.assertEqual(
                 set(provenance["macos_source_lock"]["files"]), MACOS_SOURCE_FILES
             )
             self.assertEqual(
                 len((metadata / "SHA256SUMS").read_text(encoding="utf-8").splitlines()),
-                12,
+                10,
             )
 
             report_path = next(assets.glob("*linux-arm64*.verification.json"))
@@ -206,7 +206,6 @@ class BundleConfigTestCase(unittest.TestCase):
             Path(__file__).resolve().parent.parent / ".github/workflows/build-release.yml"
         ).read_text(encoding="utf-8")
         for token in (
-            "macos-15-intel",
             "macos-15",
             "windows-2022",
             "windows-11-arm",
@@ -245,11 +244,6 @@ class BundleConfigTestCase(unittest.TestCase):
             "SHA-256 mismatch",
             "meson-1.12.0-py3-none-any.whl",
             "-Dbuilt_in_models=true -Denable_float=true",
-            "--without-lzma",
-            'export PKG_CONFIG="$TOOL_DIR/bin/pkg-config"',
-            'export PKG_CONFIG_LIBDIR="$TOOL_DIR/lib/pkgconfig"',
-            "isolated fontconfig pkg-config check failed",
-            '--pkg-config="$PKG_CONFIG"',
         ):
             self.assertIn(token, patch)
         self.assertNotIn("+    python3 -m virtualenv", patch)

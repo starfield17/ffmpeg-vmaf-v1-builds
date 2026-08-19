@@ -69,13 +69,6 @@
       "sha256": "bc417a4e27a252b435761e7cd2b3b6272bc3d50eab8108b4dfc4c865a4245b43",
       "format": "tar.xz"
     },
-    "macos-x86_64": {
-      "platform": "macos",
-      "architecture": "x86_64",
-      "source_kind": "build",
-      "provider": "this repository",
-      "format": "zip"
-    },
     "macos-arm64": {
       "platform": "macos",
       "architecture": "arm64",

@@ -46,7 +46,6 @@ TARGETS = {
     "windows-arm64",
     "linux-x86_64",
     "linux-arm64",
-    "macos-x86_64",
     "macos-arm64",
 }
 VMAF_MODELS = (
@@ -64,7 +63,6 @@ EXPECTED_RUNNER_CONTEXT = {
     "windows-arm64": {"runner_os": "Windows", "runner_arch": "ARM64"},
     "linux-x86_64": {"runner_os": "Linux", "runner_arch": "X64"},
     "linux-arm64": {"runner_os": "Linux", "runner_arch": "ARM64"},
-    "macos-x86_64": {"runner_os": "macOS", "runner_arch": "X64"},
     "macos-arm64": {"runner_os": "macOS", "runner_arch": "ARM64"},
 }
 

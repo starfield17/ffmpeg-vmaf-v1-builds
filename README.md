@@ -2,8 +2,8 @@
 
 Pinned FFmpeg dependency bundles for
 [Video Compressor](https://github.com/starfield17/Video_compress_Encoder_gui).
-The release contract covers native x86_64 and arm64 targets for Windows,
-Linux, and macOS.
+The release contract covers native x86_64 and arm64 targets for Windows and
+Linux, plus native arm64 for macOS. Intel macOS is not supported.
 
 macOS binaries are built from FFmpeg 9.0.1 and libvmaf 3.2.0 with the VMAF v1
 models and floating-point feature extractors enabled. Windows and Linux
@@ -26,7 +26,7 @@ The macOS build rejects any source download not listed in
 ## Release
 
 Run the **Build and release bundles** workflow manually. It creates the exact
-tag declared by `config/sources.json` only after all six native validation jobs
+tag declared by `config/sources.json` only after all five native validation jobs
 succeed. It uploads to a draft, downloads and compares every published asset,
 and only then makes the Release public. Existing tags and releases are never
 replaced.

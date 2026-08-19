@@ -26,33 +26,6 @@ index 5d9de45..6a99be9 100755
  checkStatus $? "configuration failed"
  
  # build
-diff --git a/script/build-libxml2.sh b/script/build-libxml2.sh
-index 108edea..90a80be 100755
---- a/script/build-libxml2.sh
-+++ b/script/build-libxml2.sh
-@@ -59,3 +59,3 @@ fi
- # prepare build
--./configure --prefix="$TOOL_DIR" --enable-shared=no --without-python
-+./configure --prefix="$TOOL_DIR" --enable-shared=no --without-python --without-lzma
- checkStatus $? "configuration failed"
-diff --git a/script/build-ffmpeg.sh b/script/build-ffmpeg.sh
-index ac43b32..2901a71 100755
---- a/script/build-ffmpeg.sh
-+++ b/script/build-ffmpeg.sh
-@@ -62,8 +62,12 @@ checkStatus $? "change directory failed"
- # prepare build
- EXTRA_VERSION="https://www.martin-riedl.de"
-+export PKG_CONFIG="$TOOL_DIR/bin/pkg-config"
-+export PKG_CONFIG_LIBDIR="$TOOL_DIR/lib/pkgconfig"
- export LDFLAGS="-L${TOOL_DIR}/lib"
- export CPPFLAGS="-I${TOOL_DIR}/include"
-+"$PKG_CONFIG" --static --print-errors --exists fontconfig
-+checkStatus $? "isolated fontconfig pkg-config check failed"
- # --pkg-config-flags="--static" is required to respect the Libs.private flags of the *.pc files
--./configure --prefix="$OUT_DIR" --pkg-config-flags="--static" --extra-version="$EXTRA_VERSION" \
-+./configure --prefix="$OUT_DIR" --pkg-config="$PKG_CONFIG" --pkg-config-flags="--static" --extra-version="$EXTRA_VERSION" \
-     --enable-gray --enable-libxml2 $FFMPEG_LIB_FLAGS
- checkStatus $? "configuration failed"
 diff --git a/script/functions.sh b/script/functions.sh
 index 87c7f62..23b5e9c 100755
 --- a/script/functions.sh
