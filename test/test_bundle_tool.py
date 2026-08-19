@@ -245,6 +245,11 @@ class BundleConfigTestCase(unittest.TestCase):
             "SHA-256 mismatch",
             "meson-1.12.0-py3-none-any.whl",
             "-Dbuilt_in_models=true -Denable_float=true",
+            "--without-lzma",
+            'export PKG_CONFIG="$TOOL_DIR/bin/pkg-config"',
+            'export PKG_CONFIG_LIBDIR="$TOOL_DIR/lib/pkgconfig"',
+            "isolated fontconfig pkg-config check failed",
+            '--pkg-config="$PKG_CONFIG"',
         ):
             self.assertIn(token, patch)
         self.assertNotIn("+    python3 -m virtualenv", patch)
