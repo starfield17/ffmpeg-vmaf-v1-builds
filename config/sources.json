@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "bundle_version": "9.0.1-vmaf-v1.0.16-r1",
+  "release_tag": "ffmpeg-9.0.1-vmaf-v1.0.16-r1",
+  "ffmpeg_version": "9.0.1",
+  "vmaf_model_version": "1.0.16",
+  "licenses": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/FFmpeg/FFmpeg/n9.0.1/LICENSE.md",
+      "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af"
+    },
+    {
+      "name": "COPYING.GPLv3",
+      "url": "https://raw.githubusercontent.com/FFmpeg/FFmpeg/n9.0.1/COPYING.GPLv3",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    }
+  ],
+  "macos_build": {
+    "provider": "Martin Riedl build-script with repository patch",
+    "repository": "https://git.martin-riedl.de/ffmpeg/build-script.git",
+    "commit": "f63b8aab8f5ce1a067da86ba69e34a36a7e217e5",
+    "ffmpeg_source": "https://github.com/FFmpeg/FFmpeg/tree/n9.0.1",
+    "libvmaf_source": "https://github.com/Netflix/vmaf/tree/v3.2.0"
+  },
+  "targets": {
+    "windows-x86_64": {
+      "platform": "windows",
+      "architecture": "x86_64",
+      "source_kind": "mirror",
+      "provider": "BtbN/FFmpeg-Builds",
+      "source_version": "n9.0.1-6-g9d4ca21220",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-18-15-03/ffmpeg-n9.0.1-6-g9d4ca21220-win64-gpl-9.0.zip",
+      "sha256": "2b17b6174cbff070c5aff8142bca25484727c4323a7ea99c2ed7497846f99274",
+      "format": "zip"
+    },
+    "windows-arm64": {
+      "platform": "windows",
+      "architecture": "arm64",
+      "source_kind": "mirror",
+      "provider": "BtbN/FFmpeg-Builds",
+      "source_version": "n9.0.1-6-g9d4ca21220",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-18-15-03/ffmpeg-n9.0.1-6-g9d4ca21220-winarm64-gpl-9.0.zip",
+      "sha256": "ff37f4d1f40195c8f20f6ec854289c0cdbf573abd23b8e4ac92f6eb01fb2f0a6",
+      "format": "zip"
+    },
+    "linux-x86_64": {
+      "platform": "linux",
+      "architecture": "x86_64",
+      "source_kind": "mirror",
+      "provider": "BtbN/FFmpeg-Builds",
+      "source_version": "n9.0.1-6-g9d4ca21220",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-18-15-03/ffmpeg-n9.0.1-6-g9d4ca21220-linux64-gpl-9.0.tar.xz",
+      "sha256": "c99d981946abf7f733590d0c2e8ee39316f2cf97927ef7aa2ea4edd456ac2d39",
+      "format": "tar.xz"
+    },
+    "linux-arm64": {
+      "platform": "linux",
+      "architecture": "arm64",
+      "source_kind": "mirror",
+      "provider": "BtbN/FFmpeg-Builds",
+      "source_version": "n9.0.1-6-g9d4ca21220",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-18-15-03/ffmpeg-n9.0.1-6-g9d4ca21220-linuxarm64-gpl-9.0.tar.xz",
+      "sha256": "bc417a4e27a252b435761e7cd2b3b6272bc3d50eab8108b4dfc4c865a4245b43",
+      "format": "tar.xz"
+    },
+    "macos-x86_64": {
+      "platform": "macos",
+      "architecture": "x86_64",
+      "source_kind": "build",
+      "provider": "this repository",
+      "format": "zip"
+    },
+    "macos-arm64": {
+      "platform": "macos",
+      "architecture": "arm64",
+      "source_kind": "build",
+      "provider": "this repository",
+      "format": "zip"
+    }
+  }
+}

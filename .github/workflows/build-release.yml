@@ -1,0 +1,154 @@
+name: Build and release bundles
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ffmpeg-vmaf-v1-release
+  cancel-in-progress: false
+
+jobs:
+  config:
+    name: Validate source contract
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Validate config and tests
+        run: |
+          python scripts/bundle_tool.py validate-config
+          python -m unittest discover -s test -p "test_*.py" -v
+
+  macos:
+    name: Build ${{ matrix.target }}
+    needs: config
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-x86_64
+            runner: macos-15-intel
+            architecture: x64
+          - target: macos-arm64
+            runner: macos-15
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          architecture: ${{ matrix.architecture }}
+      - name: Install build bootstrap
+        run: python -m pip install virtualenv
+      - name: Build FFmpeg
+        shell: bash
+        run: python -c "from pathlib import Path; Path('workdir').mkdir()"
+      - name: Run pinned macOS build
+        shell: bash
+        run: scripts/build_macos.sh workdir/macos-build
+      - name: Verify and package
+        shell: bash
+        run: |
+          python scripts/bundle_tool.py verify \
+            --target "${{ matrix.target }}" \
+            --bin-dir workdir/macos-build/compile/out/bin
+          python scripts/bundle_tool.py package \
+            --target "${{ matrix.target }}" \
+            --bin-dir workdir/macos-build/compile/out/bin \
+            --output workdir/release
+      - name: Upload bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-${{ matrix.target }}
+          path: workdir/release/*
+          if-no-files-found: error
+
+  btbntargets:
+    name: Validate BtbN ${{ matrix.target }}
+    needs: config
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x86_64
+            runner: windows-2022
+            architecture: x64
+          - target: windows-arm64
+            runner: windows-11-arm
+            architecture: arm64
+          - target: linux-x86_64
+            runner: ubuntu-22.04
+            architecture: x64
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          architecture: ${{ matrix.architecture }}
+      - name: Fetch pinned upstream archive
+        run: python scripts/bundle_tool.py fetch --target "${{ matrix.target }}" --output workdir/fetched
+      - name: Verify and package
+        run: |
+          python scripts/bundle_tool.py verify --target "${{ matrix.target }}" --bin-dir workdir/fetched/bin
+          python scripts/bundle_tool.py package --target "${{ matrix.target }}" --bin-dir workdir/fetched/bin --output workdir/release
+      - name: Upload bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-${{ matrix.target }}
+          path: workdir/release/*
+          if-no-files-found: error
+
+  release:
+    name: Publish atomic six-target release
+    needs: [macos, btbntargets]
+    if: ${{ needs.macos.result == 'success' && needs.btbntargets.result == 'success' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Download target bundles
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bundle-*
+          path: workdir/assets
+          merge-multiple: true
+      - name: Generate checksums and provenance
+        run: |
+          python scripts/bundle_tool.py release-metadata --assets-dir workdir/assets --output workdir/metadata
+          cp workdir/metadata/SHA256SUMS workdir/assets/SHA256SUMS
+          cp workdir/metadata/provenance.json workdir/assets/provenance.json
+      - name: Create immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(python -c 'import json; print(json.load(open("config/sources.json"))["release_tag"])')"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release already exists: $tag" >&2
+            exit 1
+          fi
+          gh release create "$tag" --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --notes "Six-target FFmpeg 9.0.1 bundle with VMAF v1.0.16 exact native smoke validation." \
+            workdir/assets/*

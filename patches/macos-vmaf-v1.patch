@@ -1,0 +1,14 @@
+diff --git a/script/build-libvmaf.sh b/script/build-libvmaf.sh
+index 5d9de45..6a99be9 100755
+--- a/script/build-libvmaf.sh
++++ b/script/build-libvmaf.sh
+@@ -51,7 +51,8 @@ prepareMeson
+ # prepare build
+ cd "vmaf-$VERSION/libvmaf/"
+ checkStatus $? "change directory failed"
+-meson build --prefix "$TOOL_DIR" --libdir=lib --buildtype release --default-library static
++meson build --prefix "$TOOL_DIR" --libdir=lib --buildtype release --default-library static \
++    -Dbuilt_in_models=true -Denable_float=true
+ checkStatus $? "configuration failed"
+ 
+ # build

@@ -1,0 +1,25 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Validate sources and compile Python
+        run: |
+          python scripts/bundle_tool.py validate-config
+          python -m compileall -q scripts test
+      - name: Run unit tests
+        run: python -m unittest discover -s test -p "test_*.py" -v
