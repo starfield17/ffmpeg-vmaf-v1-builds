@@ -12,6 +12,7 @@ from scripts.bundle_tool import (
     MACOS_SOURCE_FILES,
     TARGETS,
     VMAF_MODELS,
+    _parse_vmaf_score,
     _vmaf_graph,
     extract_binaries,
     load_config,
@@ -31,7 +32,15 @@ class BundleConfigTestCase(unittest.TestCase):
         self.assertIsInstance(targets, dict)
         assert isinstance(targets, dict)
         self.assertEqual(set(targets), TARGETS)
-        self.assertEqual(data["release_tag"], "ffmpeg-9.0.1-vmaf-v1.0.16-r1")
+        self.assertEqual(data["release_tag"], "ffmpeg-9.0.1-vmaf-v1.0.16-r2")
+        self.assertEqual(data["verification_contract_version"], 2)
+        licenses = data["licenses"]
+        self.assertIsInstance(licenses, list)
+        assert isinstance(licenses, list)
+        self.assertEqual(
+            {entry["name"] for entry in licenses},
+            {"LICENSE.md", "COPYING.GPLv3", "VMAF-LICENSE.txt"},
+        )
         macos_build = data["macos_build"]
         self.assertIsInstance(macos_build, dict)
         assert isinstance(macos_build, dict)
@@ -45,10 +54,19 @@ class BundleConfigTestCase(unittest.TestCase):
         self.assertEqual(
             windows["binary_version"], "n9.0.1-6-g9d4ca21220-20260818"
         )
+        self.assertEqual(
+            windows["ffmpeg_commit"],
+            "9d4ca21220bfd3f06fc8bfc90ddf0f6d0a484611",
+        )
+        self.assertEqual(
+            windows["libvmaf_commit"],
+            "e80d6c593e6e2327687dccd00b7cc9c91036d79f",
+        )
+        self.assertIn("d5e1920c45f0cdc418a39754e33dedd9483063a6", windows["upstream_build_recipe"])
 
     def test_production_model_contract_is_exact(self) -> None:
         self.assertEqual(
-            [model for model, _, _ in VMAF_MODELS],
+            [model for model, *_ in VMAF_MODELS],
             [
                 "vmaf_v1.0.16_3d0h",
                 "vmaf_v1.0.16_1d5h_2160",
@@ -56,12 +74,15 @@ class BundleConfigTestCase(unittest.TestCase):
                 "vmaf_v1.0.16_hfr_1d5h_2160",
             ],
         )
-        graph = _vmaf_graph(*VMAF_MODELS[0])
+        graph = _vmaf_graph(*VMAF_MODELS[0][:3])
         for token in (
+            "trunc(iw*sar/2)*2",
             "scale=1920:1080",
             "force_original_aspect_ratio=decrease",
+            "force_divisible_by=2",
             "flags=bicubic",
             "pad=1920:1080",
+            "trunc((ow-iw)/4)*2",
             "setsar=1",
             "format=yuv420p10le",
             "cambi.enc_width=320",
@@ -70,6 +91,24 @@ class BundleConfigTestCase(unittest.TestCase):
             "libvmaf",
         ):
             self.assertIn(token, graph)
+
+        self.assertEqual(
+            [(model, fps, frames) for model, _, _, fps, frames in VMAF_MODELS],
+            [
+                ("vmaf_v1.0.16_3d0h", 30, 6),
+                ("vmaf_v1.0.16_1d5h_2160", 30, 6),
+                ("vmaf_v1.0.16_hfr_3d0h", 60, 12),
+                ("vmaf_v1.0.16_hfr_1d5h_2160", 60, 12),
+            ],
+        )
+
+    def test_vmaf_score_parser_rejects_nonfinite_and_out_of_range_values(self) -> None:
+        self.assertEqual(_parse_vmaf_score("VMAF score: 99.5", "model"), 99.5)
+        for score in ("nan", "Infinity", "-0.1", "100.1"):
+            with self.subTest(score=score), self.assertRaisesRegex(
+                RuntimeError, "invalid score"
+            ):
+                _parse_vmaf_score(f"VMAF score: {score}", "model")
 
     def test_macos_source_lock_is_complete_and_hash_pinned(self) -> None:
         source_lock = load_macos_source_lock()
@@ -144,7 +183,16 @@ class BundleConfigTestCase(unittest.TestCase):
                                 "ffprobe": target["architecture"],
                             },
                             "vmaf_scores": {
-                                model: 100.0 for model, _, _ in VMAF_MODELS
+                                model: 100.0 for model, *_ in VMAF_MODELS
+                            },
+                            "vmaf_probes": {
+                                model: {"fps": fps, "frames": frames, "score": 100.0}
+                                for model, _, _, fps, frames in VMAF_MODELS
+                            },
+                            "anamorphic_normalization": {
+                                "source_geometry": "720x576 SAR 64:45",
+                                "output_geometry": "1920x1080 SAR 1:1",
+                                "luma_min": 940,
                             },
                             "encoder_smokes": ["libx265", "libsvtav1"],
                             "runtime_dependencies": {},
@@ -170,6 +218,7 @@ class BundleConfigTestCase(unittest.TestCase):
                 (metadata / "provenance.json").read_text(encoding="utf-8")
             )
             self.assertEqual(len(provenance["verification_reports"]), 5)
+            self.assertEqual(provenance["schema_version"], 2)
             self.assertEqual(
                 set(provenance["macos_source_lock"]["files"]), MACOS_SOURCE_FILES
             )

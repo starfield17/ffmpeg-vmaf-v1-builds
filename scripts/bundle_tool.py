@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -49,10 +50,17 @@ TARGETS = {
     "macos-arm64",
 }
 VMAF_MODELS = (
-    ("vmaf_v1.0.16_3d0h", 1920, 1080),
-    ("vmaf_v1.0.16_1d5h_2160", 3840, 2160),
-    ("vmaf_v1.0.16_hfr_3d0h", 1920, 1080),
-    ("vmaf_v1.0.16_hfr_1d5h_2160", 3840, 2160),
+    ("vmaf_v1.0.16_3d0h", 1920, 1080, 30, 6),
+    ("vmaf_v1.0.16_1d5h_2160", 3840, 2160, 30, 6),
+    ("vmaf_v1.0.16_hfr_3d0h", 1920, 1080, 60, 12),
+    ("vmaf_v1.0.16_hfr_1d5h_2160", 3840, 2160, 60, 12),
+)
+LICENSE_COMPONENTS = {"FFmpeg", "Netflix VMAF"}
+LICENSE_NAMES = {"LICENSE.md", "COPYING.GPLv3", "VMAF-LICENSE.txt"}
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+_VMAF_SCORE_RE = re.compile(
+    r"VMAF score:\s*([+-]?(?:nan|inf(?:inity)?|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?))",
+    re.IGNORECASE,
 )
 MACHINE_TYPES = {
     "x86_64": {"pe": 0x8664, "elf": 0x3E, "macho": 0x01000007},
@@ -69,7 +77,7 @@ EXPECTED_RUNNER_CONTEXT = {
 
 def load_config(path: Path = CONFIG_PATH) -> dict[str, object]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("schema_version") != 1:
+    if data.get("schema_version") != 2:
         raise ValueError("Unsupported source config schema.")
     targets = data.get("targets")
     if not isinstance(targets, dict) or set(targets) != TARGETS:
@@ -99,19 +107,43 @@ def _validate_digest(value: object, label: str) -> str:
     return digest
 
 
+def _validate_commit(value: object, label: str) -> str:
+    commit = str(value)
+    if _COMMIT_RE.fullmatch(commit) is None:
+        raise ValueError(f"Invalid commit for {label}: {commit}")
+    return commit
+
+
 def validate_config(data: dict[str, object]) -> None:
     if data.get("release_tag") != "ffmpeg-" + str(data.get("bundle_version")):
         raise ValueError("release_tag must be ffmpeg-<bundle_version>.")
+    if data.get("verification_contract_version") != 2:
+        raise ValueError("verification_contract_version must be 2.")
     licenses = data.get("licenses")
-    if not isinstance(licenses, list) or len(licenses) != 2:
-        raise ValueError("Exactly two FFmpeg license inputs are required.")
+    if not isinstance(licenses, list) or len(licenses) != 3:
+        raise ValueError("Exactly three FFmpeg and VMAF license inputs are required.")
+    license_names: set[str] = set()
+    license_components: set[str] = set()
     for entry in licenses:
         if not isinstance(entry, dict):
             raise ValueError("Invalid license entry.")
+        license_names.add(str(entry.get("name")))
+        license_components.add(str(entry.get("component")))
         _validate_digest(entry.get("sha256"), str(entry.get("name")))
+    if license_names != LICENSE_NAMES or license_components != LICENSE_COMPONENTS:
+        raise ValueError("License inputs must cover FFmpeg and Netflix VMAF.")
     macos_build = data.get("macos_build")
     if not isinstance(macos_build, dict) or not macos_build.get("binary_version"):
         raise ValueError("macOS build must declare its exact binary version.")
+    for field in ("commit", "ffmpeg_commit", "libvmaf_commit"):
+        _validate_commit(macos_build.get(field), f"macOS {field}")
+    for field in ("ffmpeg_source", "libvmaf_source", "libvmaf_version"):
+        if not macos_build.get(field):
+            raise ValueError(f"macOS build must declare {field}.")
+    if str(macos_build["ffmpeg_commit"]) not in str(macos_build["ffmpeg_source"]):
+        raise ValueError("macOS FFmpeg source URL must identify the exact commit.")
+    if str(macos_build["libvmaf_commit"]) not in str(macos_build["libvmaf_source"]):
+        raise ValueError("macOS libvmaf source URL must identify the exact commit.")
     targets = data["targets"]
     assert isinstance(targets, dict)
     for name, raw in targets.items():
@@ -123,6 +155,21 @@ def validate_config(data: dict[str, object]) -> None:
                 raise ValueError(
                     f"Mirror target {name} must declare source and binary versions."
                 )
+            for field in ("ffmpeg_commit", "libvmaf_commit"):
+                _validate_commit(raw.get(field), f"{name} {field}")
+            for field in (
+                "ffmpeg_source",
+                "libvmaf_version",
+                "libvmaf_source",
+                "upstream_build_recipe",
+                "upstream_release",
+            ):
+                if not raw.get(field):
+                    raise ValueError(f"Mirror target {name} must declare {field}.")
+            if str(raw["ffmpeg_commit"]) not in str(raw["ffmpeg_source"]):
+                raise ValueError(f"Mirror target {name} FFmpeg source must identify its commit.")
+            if str(raw["libvmaf_commit"]) not in str(raw["libvmaf_source"]):
+                raise ValueError(f"Mirror target {name} libvmaf source must identify its commit.")
             if raw.get("format") not in {"zip", "tar.xz"}:
                 raise ValueError(f"Unsupported archive format for {name}.")
         elif raw.get("source_kind") != "build":
@@ -254,12 +301,20 @@ def _run(command: list[str], *, timeout: int = 180) -> str:
     return output
 
 
-def _vmaf_graph(model: str, width: int, height: int) -> str:
-    normalize = (
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=bicubic,"
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+def _normalization_filter(width: int, height: int) -> str:
+    return (
+        "scale=w='max(2,trunc(iw*sar/2)*2)':"
+        "h='max(2,trunc(ih/2)*2)':flags=bicubic,setsar=1,"
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
+        "force_divisible_by=2:flags=bicubic,"
+        f"pad={width}:{height}:x='trunc((ow-iw)/4)*2':"
+        "y='trunc((oh-ih)/4)*2',"
         "setsar=1,format=yuv420p10le,settb=AVTB,setpts=PTS-STARTPTS"
     )
+
+
+def _vmaf_graph(model: str, width: int, height: int) -> str:
+    normalize = _normalization_filter(width, height)
     model_config = (
         f"version={model}\\:cambi.enc_width=320\\:"
         "cambi.enc_height=180\\:cambi.enc_bitdepth=8"
@@ -268,6 +323,52 @@ def _vmaf_graph(model: str, width: int, height: int) -> str:
         f"[0:v]{normalize}[dist];[1:v]{normalize}[ref];"
         f"[dist][ref]libvmaf=model='{model_config}':n_threads=2:n_subsample=1"
     )
+
+
+def _parse_vmaf_score(output: str, model: str) -> float:
+    matches = _VMAF_SCORE_RE.findall(output)
+    if not matches:
+        raise RuntimeError(f"VMAF model {model} did not produce a score.")
+    score = float(matches[-1])
+    if not math.isfinite(score) or not 0.0 <= score <= 100.0:
+        raise RuntimeError(f"VMAF model {model} produced invalid score {score!r}.")
+    return score
+
+
+def _verify_anamorphic_normalization(ffmpeg: Path) -> dict[str, object]:
+    output = _run(
+        [
+            str(ffmpeg),
+            "-hide_banner",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=white:size=720x576:rate=1:duration=1",
+            "-vf",
+            "setsar=64/45,"
+            + _normalization_filter(1920, 1080)
+            + ",signalstats,metadata=mode=print:key=lavfi.signalstats.YMIN:file=-",
+            "-frames:v",
+            "1",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+    matches = re.findall(r"lavfi\.signalstats\.YMIN=(\d+)", output)
+    if not matches:
+        raise RuntimeError("Anamorphic normalization did not report luma evidence.")
+    luma_min = int(matches[-1])
+    if luma_min < 800 or "1920x1080 [SAR 1:1 DAR 16:9]" not in output:
+        raise RuntimeError(
+            "Anamorphic normalization introduced padding or incorrect display geometry: "
+            f"YMIN={luma_min}."
+        )
+    return {
+        "source_geometry": "720x576 SAR 64:45",
+        "output_geometry": "1920x1080 SAR 1:1",
+        "luma_min": luma_min,
+    }
 
 
 def _expected_binary_version(
@@ -317,7 +418,8 @@ def verify_target(
     _run([str(ffprobe), "-hide_banner", "-version"])
 
     vmaf_scores = {}
-    for model, width, height in VMAF_MODELS:
+    vmaf_probes = {}
+    for model, width, height, fps, frames in VMAF_MODELS:
         output = _run(
             [
                 str(ffmpeg),
@@ -325,23 +427,26 @@ def verify_target(
                 "-f",
                 "lavfi",
                 "-i",
-                "testsrc2=size=320x180:rate=1:duration=1",
+                f"testsrc2=size=320x180:rate={fps}:duration=1",
                 "-f",
                 "lavfi",
                 "-i",
-                "testsrc2=size=320x180:rate=1:duration=1",
+                f"testsrc2=size=320x180:rate={fps}:duration=1",
                 "-filter_complex",
                 _vmaf_graph(model, width, height),
+                "-frames:v",
+                str(frames),
                 "-an",
                 "-f",
                 "null",
                 "-",
             ]
         )
-        scores = re.findall(r"VMAF score:\s*([0-9]+(?:\.[0-9]+)?)", output)
-        if not scores:
-            raise RuntimeError(f"VMAF model {model} did not produce a score.")
-        vmaf_scores[model] = float(scores[-1])
+        score = _parse_vmaf_score(output, model)
+        vmaf_scores[model] = score
+        vmaf_probes[model] = {"fps": fps, "frames": frames, "score": score}
+
+    anamorphic_normalization = _verify_anamorphic_normalization(ffmpeg)
 
     for encoder in ("libx265", "libsvtav1"):
         _run(
@@ -388,6 +493,8 @@ def verify_target(
         "binary_version": actual_version,
         "architectures": architectures,
         "vmaf_scores": vmaf_scores,
+        "vmaf_probes": vmaf_probes,
+        "anamorphic_normalization": anamorphic_normalization,
         "encoder_smokes": ["libx265", "libsvtav1"],
         "runtime_dependencies": runtime_dependencies,
     }
@@ -419,11 +526,12 @@ def package_target(
             assert isinstance(raw, dict)
             _copy_verified_url(raw, licenses_dir / str(raw["name"]))
         source = {
-            "schema_version": 1,
+            "schema_version": 2,
             "bundle_version": data["bundle_version"],
             "target": target_name,
             "source": target,
             "macos_build": data["macos_build"] if target["source_kind"] == "build" else None,
+            "bundle_recipe": _execution_context(),
         }
         (root / "SOURCE.json").write_text(
             json.dumps(source, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -460,16 +568,23 @@ def write_verification_report(
     observations: dict[str, object],
 ) -> Path:
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "target": target_name,
         "archive": {"name": archive.name, "sha256": sha256_file(archive)},
         "execution": _execution_context(),
         "observed": observations,
         "contract": {
             "ffmpeg_version": data["ffmpeg_version"],
-            "vmaf_models": [model for model, _, _ in VMAF_MODELS],
+            "verification_contract_version": data["verification_contract_version"],
+            "vmaf_models": [model for model, *_ in VMAF_MODELS],
+            "vmaf_probe_frames": {
+                model: {"fps": fps, "frames": frames}
+                for model, _, _, fps, frames in VMAF_MODELS
+            },
             "pixel_format": "yuv420p10le",
             "cambi_metadata": True,
+            "anamorphic_normalization": True,
+            "licenses": sorted(LICENSE_NAMES),
             "encoders": ["libx265", "libsvtav1"],
             "native_architecture": True,
             "macos_system_linkage_only": target_name.startswith("macos-"),
@@ -514,8 +629,16 @@ def release_metadata(assets_dir: Path, output_dir: Path, data: dict[str, object]
     for target_name, archive_name in sorted(target_archives.items()):
         report_path = assets_dir / f"{archive_name}.verification.json"
         report = json.loads(report_path.read_text(encoding="utf-8"))
-        if report.get("schema_version") != 1 or report.get("target") != target_name:
+        if report.get("schema_version") != 2 or report.get("target") != target_name:
             raise RuntimeError(f"Invalid verification identity in {report_path.name}.")
+        contract = report.get("contract")
+        if (
+            not isinstance(contract, dict)
+            or contract.get("verification_contract_version") != 2
+            or set(contract.get("licenses", [])) != LICENSE_NAMES
+            or contract.get("anamorphic_normalization") is not True
+        ):
+            raise RuntimeError(f"Invalid verification contract in {report_path.name}.")
         archive = report.get("archive")
         if not isinstance(archive, dict) or archive.get("name") != archive_name:
             raise RuntimeError(f"Invalid verified archive in {report_path.name}.")
@@ -560,9 +683,35 @@ def release_metadata(assets_dir: Path, output_dir: Path, data: dict[str, object]
             raise RuntimeError(f"Architecture evidence mismatch in {report_path.name}.")
         scores = observed.get("vmaf_scores")
         if not isinstance(scores, dict) or set(scores) != {
-            model for model, _, _ in VMAF_MODELS
+            model for model, *_ in VMAF_MODELS
         }:
             raise RuntimeError(f"VMAF evidence mismatch in {report_path.name}.")
+        if any(
+            not isinstance(score, (int, float))
+            or not math.isfinite(score)
+            or not 0 <= score <= 100
+            for score in scores.values()
+        ):
+            raise RuntimeError(f"Invalid VMAF score evidence in {report_path.name}.")
+        probes = observed.get("vmaf_probes")
+        expected_probes = {
+            model: {"fps": fps, "frames": frames}
+            for model, _, _, fps, frames in VMAF_MODELS
+        }
+        if not isinstance(probes, dict) or set(probes) != set(expected_probes):
+            raise RuntimeError(f"VMAF temporal evidence mismatch in {report_path.name}.")
+        for model, expected_probe in expected_probes.items():
+            probe = probes.get(model)
+            if not isinstance(probe, dict) or any(
+                probe.get(key) != value for key, value in expected_probe.items()
+            ):
+                raise RuntimeError(f"VMAF temporal evidence mismatch in {report_path.name}.")
+            score = probe.get("score")
+            if not isinstance(score, (int, float)) or not math.isfinite(score) or not 0 <= score <= 100:
+                raise RuntimeError(f"Invalid VMAF score evidence in {report_path.name}.")
+        anamorphic = observed.get("anamorphic_normalization")
+        if not isinstance(anamorphic, dict) or anamorphic.get("luma_min", 0) < 800:
+            raise RuntimeError(f"Anamorphic normalization evidence mismatch in {report_path.name}.")
         if observed.get("encoder_smokes") != ["libx265", "libsvtav1"]:
             raise RuntimeError(f"Encoder evidence mismatch in {report_path.name}.")
         reports.append(report)
@@ -572,7 +721,7 @@ def release_metadata(assets_dir: Path, output_dir: Path, data: dict[str, object]
         encoding="utf-8",
     )
     provenance = {
-        "schema_version": 1,
+        "schema_version": 2,
         "release_execution": release_execution,
         "sources": data,
         "macos_source_lock": load_macos_source_lock(),

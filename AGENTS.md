@@ -11,10 +11,14 @@ mirror inputs; `config/macos-source-lock.json` locks every macOS download.
 ## Invariants
 
 - Never publish an archive unless its native target job passes the exact four
-  VMAF v1 model probes, 10-bit display normalization, CAMBI metadata parsing,
-  `libx265`, and `libsvtav1` smoke tests.
+  multi-frame VMAF v1 model probes, SAR-aware 10-bit display normalization,
+  CAMBI metadata parsing, `libx265`, and `libsvtav1` smoke tests.
 - macOS binaries are built here. Windows and Linux binaries retain explicit
   BtbN provenance and are mirrored only after SHA-256 and native validation.
+- Bundle source metadata must identify the exact FFmpeg, libvmaf, upstream
+  recipe, and mirror release commits. A mirror must never be described as a
+  source build performed by this repository.
+- Every bundle carries both FFmpeg license files and the Netflix VMAF license.
 - All upstream commits, URLs, and hashes are pinned. Do not use floating
   `latest` downloads or model aliases.
 - A release is an atomic five-target set. One failed target blocks publication.
