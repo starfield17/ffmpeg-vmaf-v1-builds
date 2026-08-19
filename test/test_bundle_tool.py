@@ -42,6 +42,9 @@ class BundleConfigTestCase(unittest.TestCase):
         self.assertIsInstance(windows, dict)
         assert isinstance(windows, dict)
         self.assertEqual(str(windows["sha256"])[:8], "2b17b617")
+        self.assertEqual(
+            windows["binary_version"], "n9.0.1-6-g9d4ca21220-20260818"
+        )
 
     def test_production_model_contract_is_exact(self) -> None:
         self.assertEqual(
@@ -112,7 +115,7 @@ class BundleConfigTestCase(unittest.TestCase):
                 target = targets[target_name]
                 assert isinstance(target, dict)
                 source_version = (
-                    target["source_version"]
+                    target["binary_version"]
                     if target["source_kind"] == "mirror"
                     else "9.0.1-https://www.martin-riedl.de"
                 )
@@ -225,6 +228,11 @@ class BundleConfigTestCase(unittest.TestCase):
         self.assertNotIn("actions/setup-python@v", workflow)
         self.assertNotIn("actions/upload-artifact@v", workflow)
         self.assertNotIn("actions/download-artifact@v", workflow)
+
+        build_script = (
+            Path(__file__).resolve().parent.parent / "scripts/build_macos.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Latest failed build log", build_script)
 
     def test_macos_patch_enforces_locked_inputs_and_float_features(self) -> None:
         patch = (

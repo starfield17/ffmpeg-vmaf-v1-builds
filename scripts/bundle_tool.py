@@ -121,8 +121,10 @@ def validate_config(data: dict[str, object]) -> None:
             raise ValueError(f"Invalid target entry: {name}")
         if raw.get("source_kind") == "mirror":
             _validate_digest(raw.get("sha256"), name)
-            if not raw.get("source_version"):
-                raise ValueError(f"Mirror target {name} must declare source_version.")
+            if not raw.get("source_version") or not raw.get("binary_version"):
+                raise ValueError(
+                    f"Mirror target {name} must declare source and binary versions."
+                )
             if raw.get("format") not in {"zip", "tar.xz"}:
                 raise ValueError(f"Unsupported archive format for {name}.")
         elif raw.get("source_kind") != "build":
@@ -274,7 +276,7 @@ def _expected_binary_version(
     target: dict[str, object], data: dict[str, object]
 ) -> str:
     if target["source_kind"] == "mirror":
-        return str(target["source_version"])
+        return str(target["binary_version"])
     macos_build = data["macos_build"]
     assert isinstance(macos_build, dict)
     return str(macos_build["binary_version"])

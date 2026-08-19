@@ -15,6 +15,21 @@ recipe_root="$build_root/recipe"
 compile_root="$build_root/compile"
 upstream_commit="f63b8aab8f5ce1a067da86ba69e34a36a7e217e5"
 
+report_failure() {
+    status=$?
+    if [[ $status -ne 0 && -d "$compile_root/log" ]]; then
+        log_files=("$compile_root"/log/*.log)
+        if [[ -f "${log_files[0]}" ]]; then
+            latest_log="$(ls -t "${log_files[@]}" | head -n 1)"
+            echo "::group::Latest failed build log: $latest_log"
+            tail -n 240 "$latest_log"
+            echo "::endgroup::"
+        fi
+    fi
+    exit "$status"
+}
+trap report_failure EXIT
+
 if [[ -e "$build_root" ]]; then
     echo "build root already exists: $build_root" >&2
     exit 1

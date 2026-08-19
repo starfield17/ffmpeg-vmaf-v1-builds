@@ -31,6 +31,7 @@
       "source_kind": "mirror",
       "provider": "BtbN/FFmpeg-Builds",
       "source_version": "n9.0.1-6-g9d4ca21220",
+      "binary_version": "n9.0.1-6-g9d4ca21220-20260818",
       "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-18-15-03/ffmpeg-n9.0.1-6-g9d4ca21220-win64-gpl-9.0.zip",
       "sha256": "2b17b6174cbff070c5aff8142bca25484727c4323a7ea99c2ed7497846f99274",
       "format": "zip"
@@ -41,6 +42,7 @@
       "source_kind": "mirror",
       "provider": "BtbN/FFmpeg-Builds",
       "source_version": "n9.0.1-6-g9d4ca21220",
+      "binary_version": "n9.0.1-6-g9d4ca21220-20260818",
       "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-18-15-03/ffmpeg-n9.0.1-6-g9d4ca21220-winarm64-gpl-9.0.zip",
       "sha256": "ff37f4d1f40195c8f20f6ec854289c0cdbf573abd23b8e4ac92f6eb01fb2f0a6",
       "format": "zip"
@@ -51,6 +53,7 @@
       "source_kind": "mirror",
       "provider": "BtbN/FFmpeg-Builds",
       "source_version": "n9.0.1-6-g9d4ca21220",
+      "binary_version": "n9.0.1-6-g9d4ca21220-20260818",
       "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-18-15-03/ffmpeg-n9.0.1-6-g9d4ca21220-linux64-gpl-9.0.tar.xz",
       "sha256": "c99d981946abf7f733590d0c2e8ee39316f2cf97927ef7aa2ea4edd456ac2d39",
       "format": "tar.xz"
@@ -61,6 +64,7 @@
       "source_kind": "mirror",
       "provider": "BtbN/FFmpeg-Builds",
       "source_version": "n9.0.1-6-g9d4ca21220",
+      "binary_version": "n9.0.1-6-g9d4ca21220-20260818",
       "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-18-15-03/ffmpeg-n9.0.1-6-g9d4ca21220-linuxarm64-gpl-9.0.tar.xz",
       "sha256": "bc417a4e27a252b435761e7cd2b3b6272bc3d50eab8108b4dfc4c865a4245b43",
       "format": "tar.xz"
