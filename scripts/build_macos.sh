@@ -52,7 +52,6 @@ export VMAF_SOURCE_LOCK="$repository_root/config/macos-source-lock.json"
     -SKIP_ZIMG=YES \
     -SKIP_ZVBI=YES \
     -SKIP_AOM=YES \
-    -SKIP_DAV1D=YES \
     -SKIP_OPEN_H264=YES \
     -SKIP_OPEN_JPEG=YES \
     -SKIP_RAV1E=YES \

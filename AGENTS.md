@@ -13,7 +13,7 @@ mirror inputs; `config/macos-source-lock.json` locks every macOS download.
 - Never publish an archive unless its native target job passes the exact four
   multi-frame VMAF v1 model probes, SAR-aware 10-bit display normalization,
   CAMBI metadata parsing, `libx265`, `libsvtav1`, and `siti`/`scdet` Scout
-  smoke tests.
+  smoke tests, plus complete 24-frame HEVC/AV1 software decoding and VMAF scoring.
 - macOS binaries are built here. Windows and Linux binaries retain explicit
   BtbN provenance and are mirrored only after SHA-256 and native validation.
 - Bundle source metadata must identify the exact FFmpeg, libvmaf, upstream

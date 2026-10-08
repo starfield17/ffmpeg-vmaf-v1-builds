@@ -25,6 +25,7 @@ MACOS_SOURCE_FILES = {
     "SDL2.tar.gz",
     "SVT-AV1.tar.gz",
     "cmake-release.tar.gz",
+    "dav1d.tar.xz",
     "ffmpeg.tar.bz2",
     "fontconfig.tar.xz",
     "freetype.tar.gz",
@@ -55,8 +56,8 @@ VMAF_MODELS = (
     ("vmaf_v1.0.16_hfr_3d0h", 1920, 1080, 60, 12),
     ("vmaf_v1.0.16_hfr_1d5h_2160", 3840, 2160, 60, 12),
 )
-LICENSE_COMPONENTS = {"FFmpeg", "Netflix VMAF"}
-LICENSE_NAMES = {"LICENSE.md", "COPYING.GPLv3", "VMAF-LICENSE.txt"}
+LICENSE_COMPONENTS = {"FFmpeg", "Netflix VMAF", "dav1d"}
+LICENSE_NAMES = {"LICENSE.md", "COPYING.GPLv3", "VMAF-LICENSE.txt", "DAV1D-LICENSE.txt"}
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 _VMAF_SCORE_RE = re.compile(
     r"VMAF score:\s*([+-]?(?:nan|inf(?:inity)?|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?))",
@@ -121,11 +122,11 @@ def _validate_commit(value: object, label: str) -> str:
 def validate_config(data: dict[str, object]) -> None:
     if data.get("release_tag") != "ffmpeg-" + str(data.get("bundle_version")):
         raise ValueError("release_tag must be ffmpeg-<bundle_version>.")
-    if data.get("verification_contract_version") != 3:
-        raise ValueError("verification_contract_version must be 3.")
+    if data.get("verification_contract_version") != 4:
+        raise ValueError("verification_contract_version must be 4.")
     licenses = data.get("licenses")
-    if not isinstance(licenses, list) or len(licenses) != 3:
-        raise ValueError("Exactly three FFmpeg and VMAF license inputs are required.")
+    if not isinstance(licenses, list) or len(licenses) != 4:
+        raise ValueError("Exactly four FFmpeg, VMAF and dav1d license inputs are required.")
     license_names: set[str] = set()
     license_components: set[str] = set()
     for entry in licenses:
@@ -135,13 +136,13 @@ def validate_config(data: dict[str, object]) -> None:
         license_components.add(str(entry.get("component")))
         _validate_digest(entry.get("sha256"), str(entry.get("name")))
     if license_names != LICENSE_NAMES or license_components != LICENSE_COMPONENTS:
-        raise ValueError("License inputs must cover FFmpeg and Netflix VMAF.")
+        raise ValueError("License inputs must cover FFmpeg, Netflix VMAF and dav1d.")
     macos_build = data.get("macos_build")
     if not isinstance(macos_build, dict) or not macos_build.get("binary_version"):
         raise ValueError("macOS build must declare its exact binary version.")
-    for field in ("commit", "ffmpeg_commit", "libvmaf_commit"):
+    for field in ("commit", "ffmpeg_commit", "libvmaf_commit", "dav1d_commit"):
         _validate_commit(macos_build.get(field), f"macOS {field}")
-    for field in ("ffmpeg_source", "libvmaf_source", "libvmaf_version"):
+    for field in ("ffmpeg_source", "libvmaf_source", "libvmaf_version", "dav1d_source", "dav1d_version"):
         if not macos_build.get(field):
             raise ValueError(f"macOS build must declare {field}.")
     if str(macos_build["ffmpeg_commit"]) not in str(macos_build["ffmpeg_source"]):
@@ -289,7 +290,7 @@ def binary_architecture(path: Path) -> str:
     raise ValueError(f"Unsupported {binary_format} machine 0x{machine:x}: {path}")
 
 
-def _run(command: list[str], *, timeout: int = 180) -> str:
+def _run(command: list[str], *, timeout: int = 180, cwd: Path | None = None) -> str:
     result = subprocess.run(
         command,
         check=False,
@@ -298,6 +299,7 @@ def _run(command: list[str], *, timeout: int = 180) -> str:
         encoding="utf-8",
         errors="replace",
         timeout=timeout,
+        cwd=cwd,
     )
     output = result.stdout + "\n" + result.stderr
     if result.returncode != 0:
@@ -448,6 +450,63 @@ def _verify_anamorphic_normalization(ffmpeg: Path) -> dict[str, object]:
     }
 
 
+def verify_codec_roundtrips(ffmpeg: Path, ffprobe: Path) -> dict[str, object]:
+    """Verify produced bitstreams through software decoding and complete scoring."""
+    evidence: dict[str, object] = {}
+    ffmpeg, ffprobe = ffmpeg.resolve(), ffprobe.resolve()
+    with tempfile.TemporaryDirectory(prefix="ffmpeg-roundtrip-") as temporary:
+        work = Path(temporary)
+        reference = work / "reference.mkv"
+        _run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+              "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=1",
+              "-frames:v", "24", "-pix_fmt", "yuv420p", "-c:v", "ffv1", str(reference)])
+        for encoder, codec, preset in (("libx265", "hevc", "fast"), ("libsvtav1", "av1", "10")):
+            encoded = work / (codec + ".mkv")
+            _run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+                  "-hwaccel", "none", "-i", str(reference), "-an", "-frames:v", "24",
+                  "-pix_fmt", "yuv420p", "-c:v", encoder, "-preset", preset,
+                  "-b:v", "500k", "-g", "24", str(encoded)])
+            stream = json.loads(_run([str(ffprobe), "-v", "error", "-select_streams", "v:0",
+                                     "-show_streams", "-of", "json", str(encoded)]))["streams"][0]
+            if (stream.get("codec_name"), stream.get("width"), stream.get("height"), stream.get("pix_fmt")) != (codec, 320, 180, "yuv420p"):
+                raise RuntimeError(f"Unexpected encoded stream configuration for {encoder}.")
+            decoded = _run([str(ffmpeg), "-hide_banner", "-loglevel", "error",
+                            "-hwaccel", "none", "-i", str(encoded), "-map", "0:v:0", "-an",
+                            "-f", "framemd5", "-"])
+            decoded_frames = len([line for line in decoded.splitlines() if line.strip() and not line.startswith("#")])
+            if decoded_frames != 24:
+                raise RuntimeError(f"Software decode produced {decoded_frames} frames for {encoder}, expected 24.")
+            graph = (_vmaf_graph(*VMAF_MODELS[0][:3]) +
+                     ":log_fmt=json:log_path=" + codec + "-vmaf.json")
+            _run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-hwaccel", "none",
+                  "-i", str(encoded), "-hwaccel", "none", "-i", str(reference),
+                  "-filter_complex", graph, "-an", "-f", "null", "-"], cwd=work)
+            frames = json.loads((work / (codec + "-vmaf.json")).read_text())["frames"]
+            scores = [frame["metrics"]["vmaf"] for frame in frames]
+            if len(frames) != 24 or [frame["frameNum"] for frame in frames] != list(range(24)) or any(
+                    not isinstance(score, (int, float)) or not math.isfinite(score) or not 0 <= score <= 100 for score in scores):
+                raise RuntimeError(f"Incomplete or invalid roundtrip VMAF scores for {encoder}.")
+            evidence[encoder] = {"codec": codec, "frames": 24, "decoded_frames": decoded_frames,
+                                 "scored_frames": len(frames), "width": 320, "height": 180,
+                                 "pixel_format": "yuv420p", "software_decode": True,
+                                 "mean_vmaf": sum(scores) / len(scores)}
+    return evidence
+
+
+def validate_roundtrip_evidence(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != {"libx265", "libsvtav1"}:
+        raise RuntimeError("Missing codec roundtrip evidence.")
+    for encoder, codec in (("libx265", "hevc"), ("libsvtav1", "av1")):
+        observation = value[encoder]
+        expected = {"codec": codec, "frames": 24, "decoded_frames": 24, "scored_frames": 24,
+                    "width": 320, "height": 180, "pixel_format": "yuv420p", "software_decode": True}
+        if not isinstance(observation, dict) or any(observation.get(k) != v for k, v in expected.items()):
+            raise RuntimeError(f"Invalid codec roundtrip evidence for {encoder}.")
+        score = observation.get("mean_vmaf")
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) or not 0 <= score <= 100:
+            raise RuntimeError(f"Invalid codec roundtrip score for {encoder}.")
+
+
 def _expected_binary_version(
     target: dict[str, object], data: dict[str, object]
 ) -> str:
@@ -530,26 +589,7 @@ def verify_target(
 
     anamorphic_normalization = _verify_anamorphic_normalization(ffmpeg)
 
-    for encoder in ("libx265", "libsvtav1"):
-        _run(
-            [
-                str(ffmpeg),
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                "testsrc2=size=128x128:duration=0.2:rate=5",
-                "-frames:v",
-                "1",
-                "-c:v",
-                encoder,
-                "-f",
-                "null",
-                "-",
-            ]
-        )
+    codec_roundtrips = verify_codec_roundtrips(ffmpeg, ffprobe)
 
     runtime_dependencies = {}
     if target["platform"] == "macos":
@@ -581,6 +621,7 @@ def verify_target(
         "vmaf_probes": vmaf_probes,
         "anamorphic_normalization": anamorphic_normalization,
         "encoder_smokes": ["libx265", "libsvtav1"],
+        "codec_roundtrips": codec_roundtrips,
         "runtime_dependencies": runtime_dependencies,
     }
 
@@ -663,6 +704,7 @@ def write_verification_report(
             "verification_contract_version": data["verification_contract_version"],
             "required_filters": list(REQUIRED_FILTERS),
             "scout_smoke": True,
+            "codec_roundtrips": True,
             "vmaf_models": [model for model, *_ in VMAF_MODELS],
             "vmaf_probe_frames": {
                 model: {"fps": fps, "frames": frames}
@@ -721,9 +763,10 @@ def release_metadata(assets_dir: Path, output_dir: Path, data: dict[str, object]
         contract = report.get("contract")
         if (
             not isinstance(contract, dict)
-            or contract.get("verification_contract_version") != 3
+            or contract.get("verification_contract_version") != 4
             or contract.get("required_filters") != list(REQUIRED_FILTERS)
             or contract.get("scout_smoke") is not True
+            or contract.get("codec_roundtrips") is not True
             or set(contract.get("licenses", [])) != LICENSE_NAMES
             or contract.get("anamorphic_normalization") is not True
         ):
@@ -823,6 +866,7 @@ def release_metadata(assets_dir: Path, output_dir: Path, data: dict[str, object]
             raise RuntimeError(f"Anamorphic normalization evidence mismatch in {report_path.name}.")
         if observed.get("encoder_smokes") != ["libx265", "libsvtav1"]:
             raise RuntimeError(f"Encoder evidence mismatch in {report_path.name}.")
+        validate_roundtrip_evidence(observed.get("codec_roundtrips"))
         reports.append(report)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "SHA256SUMS").write_text(

@@ -2,7 +2,10 @@ diff --git a/script/build-cmake.sh b/script/build-cmake.sh
 index 4c7fc37..ac11d92 100755
 --- a/script/build-cmake.sh
 +++ b/script/build-cmake.sh
-@@ -31,9 +31 @@ VERSION_PATCH="4.0.3"
+@@ -28,14 +28,6 @@ CPUS=$4
+ VERSION_MINOR="4.0"
+ VERSION_PATCH="4.0.3"
+
 -# detect existing installation of cmake
 -CURRENT_VERSION=$(cmake --version | grep -m 1 "" |  sed -r 's/.*([0-9]+\.[0-9]+\.[0-9]+)/\1/')
 -echo "detected installed version of cmake: $CURRENT_VERSION"
@@ -12,6 +15,26 @@ index 4c7fc37..ac11d92 100755
 -fi
 -
  # start in working directory
+ cd "$SOURCE_DIR"
+ checkStatus $? "change directory failed"
+diff --git a/script/build-dav1d.sh b/script/build-dav1d.sh
+index 4ed5123..678c8a0 100755
+--- a/script/build-dav1d.sh
++++ b/script/build-dav1d.sh
+@@ -38,11 +38,11 @@ cd "dav1d/"
+ checkStatus $? "change directory failed"
+
+ # download source
+-download https://code.videolan.org/videolan/dav1d/-/archive/$VERSION/dav1d-$VERSION.tar.gz "dav1d.tar.gz"
++download https://download.videolan.org/pub/videolan/dav1d/$VERSION/dav1d-$VERSION.tar.xz "dav1d.tar.xz"
+ checkStatus $? "download failed"
+
+ # unpack
+-tar -zxf "dav1d.tar.gz"
++tar -Jxf "dav1d.tar.xz"
+ checkStatus $? "unpack failed"
+
+ # prepare python3 virtual environment / meson
 diff --git a/script/build-libvmaf.sh b/script/build-libvmaf.sh
 index 5d9de45..6a99be9 100755
 --- a/script/build-libvmaf.sh
@@ -24,10 +47,10 @@ index 5d9de45..6a99be9 100755
 +meson build --prefix "$TOOL_DIR" --libdir=lib --buildtype release --default-library static \
 +    -Dbuilt_in_models=true -Denable_float=true
  checkStatus $? "configuration failed"
- 
+
  # build
 diff --git a/script/functions.sh b/script/functions.sh
-index 87c7f62..23b5e9c 100755
+index 87c7f62..878629e 100755
 --- a/script/functions.sh
 +++ b/script/functions.sh
 @@ -45,22 +45,39 @@ echoDurationInSections(){
@@ -63,7 +86,6 @@ index 87c7f62..23b5e9c 100755
 
  prepareMeson(){
 -    python3 -m virtualenv .venv
-+    python3 -m venv .venv
 -    if [ $? -ne 0 ]; then
 -        echo "python create virtual environment failed"
 -
@@ -77,6 +99,7 @@ index 87c7f62..23b5e9c 100755
 -        pip install meson
 -        checkStatus $? "python meson installation failed"
 -    fi
++    python3 -m venv .venv
 +    checkStatus $? "python create virtual environment failed"
 +    . .venv/bin/activate
 +    checkStatus $? "python activate virtual environment failed"
@@ -85,3 +108,12 @@ index 87c7f62..23b5e9c 100755
 +    pip install --no-deps ./meson-1.12.0-py3-none-any.whl
 +    checkStatus $? "python meson installation failed"
  }
+diff --git a/version/ffmpeg b/version/ffmpeg
+index 6768f7e..f202cd9 100644
+--- a/version/ffmpeg
++++ b/version/ffmpeg
+@@ -1 +1 @@
+-9.0.1
+\ No newline at end of file
++9.0.2
+\ No newline at end of file

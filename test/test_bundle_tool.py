@@ -23,7 +23,16 @@ from scripts.bundle_tool import (
     validate_config,
     validate_macos_source_lock,
     write_verification_report,
+    validate_roundtrip_evidence,
+    verify_codec_roundtrips,
 )
+
+
+def roundtrip_evidence():
+    return {encoder: {"codec": codec, "frames": 24, "decoded_frames": 24,
+                      "scored_frames": 24, "width": 320, "height": 180,
+                      "pixel_format": "yuv420p", "software_decode": True, "mean_vmaf": 95.0}
+            for encoder, codec in (("libx265", "hevc"), ("libsvtav1", "av1"))}
 
 
 class BundleConfigTestCase(unittest.TestCase):
@@ -34,37 +43,37 @@ class BundleConfigTestCase(unittest.TestCase):
         self.assertIsInstance(targets, dict)
         assert isinstance(targets, dict)
         self.assertEqual(set(targets), TARGETS)
-        self.assertEqual(data["release_tag"], "ffmpeg-9.0.1-vmaf-v1.0.16-r3")
-        self.assertEqual(data["verification_contract_version"], 3)
+        self.assertEqual(data["release_tag"], "ffmpeg-9.0.2-vmaf-v1.0.16-r1")
+        self.assertEqual(data["verification_contract_version"], 4)
         licenses = data["licenses"]
         self.assertIsInstance(licenses, list)
         assert isinstance(licenses, list)
         self.assertEqual(
             {entry["name"] for entry in licenses},
-            {"LICENSE.md", "COPYING.GPLv3", "VMAF-LICENSE.txt"},
+            {"LICENSE.md", "COPYING.GPLv3", "VMAF-LICENSE.txt", "DAV1D-LICENSE.txt"},
         )
         macos_build = data["macos_build"]
         self.assertIsInstance(macos_build, dict)
         assert isinstance(macos_build, dict)
         self.assertEqual(
-            macos_build["binary_version"], "9.0.1-https://www.martin-riedl.de"
+            macos_build["binary_version"], "9.0.2-https://www.martin-riedl.de"
         )
         windows = targets["windows-x86_64"]
         self.assertIsInstance(windows, dict)
         assert isinstance(windows, dict)
-        self.assertEqual(str(windows["sha256"])[:8], "2b17b617")
+        self.assertEqual(str(windows["sha256"])[:8], "3ec93d2b")
         self.assertEqual(
-            windows["binary_version"], "n9.0.1-6-g9d4ca21220-20260818"
+            windows["binary_version"], "n9.0.2-22-g46d8f462ee-20261007"
         )
         self.assertEqual(
             windows["ffmpeg_commit"],
-            "9d4ca21220bfd3f06fc8bfc90ddf0f6d0a484611",
+            "46d8f462eeb87ee1f704d8c44a0ee24fca471ad1",
         )
         self.assertEqual(
             windows["libvmaf_commit"],
-            "e80d6c593e6e2327687dccd00b7cc9c91036d79f",
+            "86da14d0306a138fd3f01319860b905169746516",
         )
-        self.assertIn("d5e1920c45f0cdc418a39754e33dedd9483063a6", windows["upstream_build_recipe"])
+        self.assertIn("9acad4a9ef1583096af7836cc1e9c8cbcb4d3950", windows["upstream_build_recipe"])
 
     def test_production_model_contract_is_exact(self) -> None:
         self.assertEqual(
@@ -133,7 +142,7 @@ class BundleConfigTestCase(unittest.TestCase):
         self.assertEqual(set(files), MACOS_SOURCE_FILES)
         self.assertEqual(
             files["ffmpeg.tar.bz2"],
-            "3317ad21d5e2c2eab8423ae6f49b12463960055925f39a025496964afeb9042c",
+            "ee80a25a5621df84498cef46917be87eab3b4f01951e85c2c7cbe5c94914ee70",
         )
 
     def test_archive_extraction_only_accepts_expected_binary_names(self) -> None:
@@ -170,7 +179,7 @@ class BundleConfigTestCase(unittest.TestCase):
                 source_version = (
                     target["binary_version"]
                     if target["source_kind"] == "mirror"
-                    else "9.0.1-https://www.martin-riedl.de"
+                    else "9.0.2-https://www.martin-riedl.de"
                 )
                 runner = EXPECTED_RUNNER_CONTEXT[target_name]
                 with patch.dict(
@@ -220,6 +229,7 @@ class BundleConfigTestCase(unittest.TestCase):
                                 "luma_min": 940,
                             },
                             "encoder_smokes": ["libx265", "libsvtav1"],
+                            "codec_roundtrips": roundtrip_evidence(),
                             "runtime_dependencies": {},
                         },
                     )
@@ -322,6 +332,46 @@ class BundleConfigTestCase(unittest.TestCase):
             self.assertIn(token, patch)
         self.assertNotIn("+    python3 -m virtualenv", patch)
         self.assertNotIn("+        MESON_VERSION=$(meson -v", patch)
+
+
+class CodecRoundtripTestCase(unittest.TestCase):
+    def test_evidence_requires_complete_software_roundtrip(self):
+        validate_roundtrip_evidence(roundtrip_evidence())
+        for field, value in (("decoded_frames", 23), ("scored_frames", 23),
+                             ("software_decode", False), ("width", 128),
+                             ("mean_vmaf", float("nan"))):
+            with self.subTest(field=field):
+                evidence = roundtrip_evidence()
+                evidence["libsvtav1"][field] = value
+                with self.assertRaises(RuntimeError):
+                    validate_roundtrip_evidence(evidence)
+        with self.assertRaises(RuntimeError):
+            validate_roundtrip_evidence({"libx265": roundtrip_evidence()["libx265"]})
+
+    def test_roundtrip_rejects_missing_decoder_and_incomplete_scores(self):
+        for failure in ("decoder", "frames", "score", "frame_order"):
+            with self.subTest(failure=failure):
+                def run(command, failure=failure, **kwargs):
+                    if "-show_streams" in command:
+                        codec = Path(command[-1]).stem
+                        return json.dumps({"streams": [{"codec_name": codec, "width": 320,
+                                                       "height": 180, "pix_fmt": "yuv420p"}]})
+                    if "framemd5" in command:
+                        if failure == "decoder":
+                            raise RuntimeError("decoder unavailable")
+                        return "\n".join("0, 0, 0, 1, 86400, hash" for _ in range(24))
+                    if "-filter_complex" in command:
+                        graph = command[command.index("-filter_complex") + 1]
+                        scores = [{"frameNum": n, "metrics": {"vmaf": 95.0}}
+                                  for n in range(23 if failure == "frames" else 24)]
+                        if failure == "score":
+                            scores[0]["metrics"]["vmaf"] = float("nan")
+                        if failure == "frame_order":
+                            scores[0]["frameNum"] = 1
+                        (kwargs["cwd"] / graph.split("log_path=")[-1]).write_text(json.dumps({"frames": scores}))
+                    return ""
+                with patch("scripts.bundle_tool._run", side_effect=run), self.assertRaises(RuntimeError):
+                    verify_codec_roundtrips(Path("ffmpeg"), Path("ffprobe"))
 
 
 if __name__ == "__main__":

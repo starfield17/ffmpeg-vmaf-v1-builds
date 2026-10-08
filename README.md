@@ -5,7 +5,7 @@ Pinned FFmpeg dependency bundles for
 The release contract covers native x86_64 and arm64 targets for Windows and
 Linux, plus native arm64 for macOS. Intel macOS is not supported.
 
-macOS binaries are built from FFmpeg 9.0.1 and libvmaf 3.2.0 with the VMAF v1
+macOS binaries are built from FFmpeg 9.0.2 and libvmaf 3.2.0 and static dav1d 1.5.4 with the VMAF v1
 models and floating-point feature extractors enabled. Windows and Linux
 binaries are pinned BtbN GPL builds, mirrored only after checksum validation
 and execution on their native GitHub-hosted runners. They are not rebuilt by
@@ -38,3 +38,8 @@ tag declared by `config/sources.json` only after all five native validation jobs
 succeed. It uploads to a draft, downloads and compares every published asset,
 and only then makes the Release public. Existing tags and releases are never
 replaced.
+
+Verification contract v4 requires 24-frame HEVC and AV1 encode, software decode,
+stream geometry/pixel-format checks, and complete CPU VMAF scoring. Windows/Linux
+use the pinned 2026-10-07 BtbN 9.0 branch builds (9.0.2 plus 22 commits); macOS
+uses the official 9.0.2 source. The release retains the VMAF v1.0.16 models.
